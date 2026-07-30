@@ -18,7 +18,7 @@ Black Out! is a mobile-first, pass-and-play party board game built as an install
 
 ## Stack
 
-- Node 20+
+- Node 24+
 - pnpm 11.9.0
 - React 18
 - TypeScript strict mode
