@@ -218,7 +218,6 @@ export type MinigameId =
   | 'wire-cutter'
   | 'lock-picker'
   | 'bomb-defuse'
-  | 'memory-chain'
   | 'number-guess'
   | 'trivia-blitz'
   | 'exact-timer'
@@ -252,12 +251,12 @@ export type SpinnerSegmentId =
   | 'one-shot'
   | 'two-shots'
   | 'chug'
+  | 'go-start'
+  | 'back-two'
   | 'choose-player'
   | 'all-players'
   | 'everyone-shot'
-  | 'shield'
-  | 'safe'
-  | 'spin-again';
+  | 'shield';
 
 export interface SpinnerSegment {
   id: SpinnerSegmentId;

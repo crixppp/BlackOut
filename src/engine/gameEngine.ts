@@ -1126,7 +1126,13 @@ export const tileActionHandlers: Record<BoardTile['actionType'], TileActionHandl
           choice,
         );
       }
-      return addHistory(withRoll, 'Middle roll. No score change.');
+      return resolveAssignments(
+        withRoll,
+        [{ target: 'current', drinks: 1 }],
+        settings,
+        random,
+        choice,
+      );
     }
     if (roll <= 2) {
       return resolveAssignments(
@@ -1146,7 +1152,13 @@ export const tileActionHandlers: Record<BoardTile['actionType'], TileActionHandl
         choice,
       );
     }
-    return addHistory(withRoll, 'Middle roll. No score change.');
+    return resolveAssignments(
+      withRoll,
+      [{ target: 'current', drinks: 1 }],
+      settings,
+      random,
+      choice,
+    );
   },
   info: (state, tile) =>
     addHistory(state, `${tile.title}: ${String(tile.actionConfig?.message ?? 'No effect.')}`),
@@ -1212,6 +1224,12 @@ function resolveSpinnerResult(
         random,
         choice,
       );
+    case 'go-start': {
+      const current = getCurrentPlayer(withHistory);
+      return applyMovementOffset(withHistory, -current.position, settings);
+    }
+    case 'back-two':
+      return applyMovementOffset(withHistory, -2, settings);
     case 'choose-player':
       return resolveAssignments(
         withHistory,
@@ -1240,16 +1258,6 @@ function resolveSpinnerResult(
       return resolveAssignments(
         withHistory,
         [{ target: 'current', shields: 1 }],
-        settings,
-        random,
-        choice,
-      );
-    case 'safe':
-      return addHistory(withHistory, 'Spinner gave a safe result.');
-    case 'spin-again':
-      return resolveSpinnerResult(
-        withHistory,
-        pickSpinnerSegment(random),
         settings,
         random,
         choice,

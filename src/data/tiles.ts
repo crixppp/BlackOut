@@ -17,16 +17,29 @@ function makeTile(tile: TileInput): BoardTile {
 }
 
 export const SPINNER_SEGMENTS: SpinnerSegment[] = [
-  { id: 'one-drink', label: '1 sip', weight: 1, colour: '#ffd400' },
+  { id: 'one-drink', label: '1 sip', weight: 4, colour: '#ffd400' },
+  { id: 'back-two', label: 'Back 2 steps', weight: 3, colour: '#f7f7f7' },
   { id: 'two-drinks', label: '2 sips', weight: 3, colour: '#ff9f1c' },
-  { id: 'one-shot', label: '1 shot', weight: 2, colour: '#e5484d' },
   { id: 'choose-player', label: 'Choose: 2 sips', weight: 2, colour: '#3d8bfd' },
-  { id: 'all-players', label: 'Everyone sips', weight: 3, colour: '#9b5cff' },
+  { id: 'all-players', label: 'Everyone sips', weight: 2, colour: '#9b5cff' },
   { id: 'shield', label: 'Shield', weight: 2, colour: '#2fd172' },
-  { id: 'safe', label: 'Safe', weight: 2, colour: '#f7f7f7' },
+  { id: 'one-shot', label: '1 shot', weight: 1, colour: '#e5484d' },
+  { id: 'chug', label: 'Chug', weight: 1, colour: '#ff4f5e' },
+];
+
+export const JACKPOT_SPINNER_SEGMENTS: SpinnerSegment[] = [
+  { id: 'two-drinks', label: '2 sips', weight: 3, colour: '#ff9f1c' },
+  { id: 'back-two', label: 'Back 2 steps', weight: 3, colour: '#f7f7f7' },
+  { id: 'one-shot', label: '1 shot', weight: 3, colour: '#e5484d' },
+  { id: 'all-players', label: 'Everyone sips', weight: 2, colour: '#9b5cff' },
+  { id: 'choose-player', label: 'Choose: 2 sips', weight: 2, colour: '#3d8bfd' },
+  { id: 'chug', label: 'Chug', weight: 2, colour: '#ff4f5e' },
+  { id: 'go-start', label: 'Back to Start', weight: 1, colour: '#080808' },
+  { id: 'shield', label: 'Shield', weight: 1, colour: '#2fd172' },
 ];
 
 export const DEATH_WHEEL_SEGMENTS: SpinnerSegment[] = [
+  { id: 'go-start', label: 'Back to Start', weight: 3, colour: '#080808' },
   { id: 'two-shots', label: '2 shots', weight: 3, colour: '#e5484d' },
   { id: 'chug', label: 'Chug', weight: 3, colour: '#ff4f5e' },
   { id: 'everyone-shot', label: 'Everyone shot', weight: 2, colour: '#9b5cff' },
@@ -43,7 +56,6 @@ export const MINIGAME_IDS: MinigameId[] = [
   'wire-cutter',
   'lock-picker',
   'bomb-defuse',
-  'memory-chain',
   'number-guess',
   'trivia-blitz',
   'exact-timer',
@@ -218,7 +230,7 @@ export const BOARD_TILES: BoardTile[] = [
     id: 15,
     shortLabel: 'Spin',
     title: 'Spinner',
-    description: 'Spin the prize and penalty wheel.',
+    description: 'Run the prize reel. The centre line is the result.',
     category: 'minigame',
     icon: 'Disc3',
     backgroundVariant: 'yellow',
@@ -630,7 +642,7 @@ export const BOARD_TILES: BoardTile[] = [
     id: 49,
     shortLabel: 'Jackpot',
     title: 'Mini Jackpot',
-    description: 'Spin a short jackpot wheel.',
+    description: 'Run the harder jackpot reel. The centre line is the result.',
     category: 'random',
     icon: 'Sparkle',
     backgroundVariant: 'yellow',
@@ -679,7 +691,7 @@ export const BOARD_TILES: BoardTile[] = [
     id: 53,
     shortLabel: 'Catch',
     title: 'Catch Tile',
-    description: 'Choose: move forward 2 spaces or take a Shield token.',
+    description: 'Choose: move forward 1 space or take a Shield token.',
     category: 'choice',
     icon: 'Footprints',
     backgroundVariant: 'white',
@@ -687,7 +699,7 @@ export const BOARD_TILES: BoardTile[] = [
     actionConfig: {
       chooseOutcome: true,
       outcomes: [
-        { label: 'Move Forward', movement: 2 },
+        { label: 'Move Forward', movement: 1 },
         { label: 'Shield Token', assignments: [{ target: 'current', shields: 1 }] },
       ],
     },
@@ -774,7 +786,7 @@ export const BOARD_TILES: BoardTile[] = [
     id: 60,
     shortLabel: 'Death',
     title: 'Death Wheel',
-    description: 'Spin the final wheel. Every result is bad; the least severe result is 2 shots.',
+    description: 'Run the final death reel. Every result is bad; the least severe result is 2 shots.',
     category: 'shot',
     icon: 'BadgeAlert',
     backgroundVariant: 'red',

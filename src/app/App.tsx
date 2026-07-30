@@ -76,7 +76,13 @@ import {
   Zap,
   type LucideIcon,
 } from 'lucide-react';
-import { BOARD_TILES, DEATH_WHEEL_SEGMENTS, SPINNER_SEGMENTS, getTileById } from '../data/tiles';
+import {
+  BOARD_TILES,
+  DEATH_WHEEL_SEGMENTS,
+  JACKPOT_SPINNER_SEGMENTS,
+  SPINNER_SEGMENTS,
+  getTileById,
+} from '../data/tiles';
 import { CATEGORY_PROMPTS, SORTING_PUZZLES, TRIVIA_QUESTIONS } from '../data/prompts';
 import {
   advanceMovementToEnd,
@@ -86,7 +92,6 @@ import {
   createPlayerDraft,
   getCurrentPlayer,
   getEligibleTargets,
-  getSpinnerAngle,
   moveToNextTurn,
   playAgainWithSamePlayers,
   resolveCurrentTile,
@@ -114,6 +119,7 @@ import {
   type PlayerDraft,
   type PlayingCard,
   type ScreenName,
+  type SpinnerSegment,
   type SpinnerSegmentId,
   type TileChoice,
 } from '../types/game';
@@ -948,6 +954,14 @@ function GameScreen({
   const [inspectedTile, setInspectedTile] = useState<BoardTile | null>(null);
   const popupTimeoutRef = useRef<number | null>(null);
 
+  const dismissPopup = useCallback(() => {
+    if (popupTimeoutRef.current) {
+      window.clearTimeout(popupTimeoutRef.current);
+      popupTimeoutRef.current = null;
+    }
+    setPopup(null);
+  }, []);
+
   const showPopup = useCallback((title: string, message: string, tone: PopupTone = 'info') => {
     if (popupTimeoutRef.current) {
       window.clearTimeout(popupTimeoutRef.current);
@@ -981,9 +995,9 @@ function GameScreen({
         }
         return state;
       });
-    }, POPUP_DURATION_MS + 250);
+    }, popup ? POPUP_DURATION_MS + 250 : 700);
     return () => window.clearTimeout(timeout);
-  }, [game.turnPhase, setGame, settings]);
+  }, [game.turnPhase, popup, setGame, settings]);
 
   return (
     <main className="game-screen">
@@ -1005,11 +1019,11 @@ function GameScreen({
 
       <Board game={game} settings={settings} onInspectTile={setInspectedTile} />
 
-      <GameControlDock game={game} settings={settings} setGame={setGame} showPopup={showPopup} />
+      <GameControlDock game={game} settings={settings} setGame={setGame} />
       {game.currentTileResolution && (
         <TileActionModal game={game} settings={settings} setGame={setGame} showPopup={showPopup} />
       )}
-      <PopupOverlay popup={popup} />
+      <PopupOverlay popup={popup} onDismiss={dismissPopup} />
       {inspectedTile && (
         <TileInfoModal
           tile={inspectedTile}
@@ -1260,12 +1274,10 @@ function GameControlDock({
   game,
   settings,
   setGame,
-  showPopup,
 }: {
   game: GameState;
   settings: GameSettings;
   setGame: React.Dispatch<React.SetStateAction<GameState | null>>;
-  showPopup: (title: string, message: string, tone?: PopupTone) => void;
 }) {
   const current = getCurrentPlayer(game);
   const [announced, setAnnounced] = useState('');
@@ -1273,11 +1285,8 @@ function GameControlDock({
   useEffect(() => {
     if (game.pendingRoll) {
       setAnnounced(`${current.name} rolled a ${game.pendingRoll.value}.`);
-      if (game.pendingRoll.value === 6 && game.turnPhase === 'rolling') {
-        showPopup('Bonus Turn', `${current.name} rolled a 6. They go again after this tile.`, 'prize');
-      }
     }
-  }, [current.name, game.pendingRoll, game.turnPhase, showPopup]);
+  }, [current.name, game.pendingRoll]);
 
   if (game.turnPhase === 'game-complete') {
     return null;
@@ -1308,6 +1317,9 @@ function GameControlDock({
       <div className="dock-status">
         <strong>{status.title}</strong>
         <span>{status.detail}</span>
+        {game.bonusTurnPlayerId === current.id && game.turnPhase !== 'awaiting-roll' && (
+          <em>Bonus turn queued</em>
+        )}
       </div>
 
       <div className="dock-actions">
@@ -1414,19 +1426,27 @@ function DiceRollIndicator({ value, rolling }: { value: number; rolling: boolean
   );
 }
 
-function PopupOverlay({ popup }: { popup: GamePopup | null }) {
+function PopupOverlay({
+  popup,
+  onDismiss,
+}: {
+  popup: GamePopup | null;
+  onDismiss: () => void;
+}) {
   if (!popup) {
     return null;
   }
   return (
-    <div
-      className={`game-popup tone-${popup.tone}`}
-      role="status"
-      aria-live="polite"
-      style={{ '--popup-duration': `${popup.durationMs}ms` } as CSSProperties}
-    >
-      <strong>{popup.title}</strong>
-      <span>{popup.message}</span>
+    <div className="game-popup-hitarea" onClick={onDismiss}>
+      <div
+        className={`game-popup tone-${popup.tone}`}
+        role="status"
+        aria-live="polite"
+        style={{ '--popup-duration': `${popup.durationMs}ms` } as CSSProperties}
+      >
+        <strong>{popup.title}</strong>
+        <span>{popup.message}</span>
+      </div>
     </div>
   );
 }
@@ -1553,7 +1573,7 @@ function TileActionModal({
   const noValidPlayerChoice = needsPlayerChoice && targets.length === 0;
   const needsMultiplePlayers =
     isMinigame &&
-    ['categories', 'dice-duel', 'finger-picker', 'memory-chain', 'name-three', 'sorting-sprint', 'bluff-breaker', 'token-toss'].includes(
+    ['categories', 'dice-duel', 'finger-picker', 'sorting-sprint', 'bluff-breaker', 'token-toss'].includes(
       String(tile?.actionConfig?.minigameId),
     );
 
@@ -1613,7 +1633,6 @@ function TileActionModal({
       return;
     }
     if (!previewVisible && challengeStarted && autoResolvable && !actionSubmittedRef.current) {
-      showPopup(display.title, display.description, tile?.category === 'shot' ? 'danger' : 'info');
       resolve();
     }
   });
@@ -1624,7 +1643,15 @@ function TileActionModal({
 
   if (previewVisible || !challengeStarted) {
     return (
-      <Modal title={display.title} className="tile-modal reveal-modal">
+      <Modal
+        title={display.title}
+        className="tile-modal reveal-modal"
+        onDismiss={() => {
+          setPreviewVisible(false);
+          setChallengeStarted(true);
+        }}
+        dismissOnContentClick
+      >
         <div className={`tile-banner variant-${tile.backgroundVariant}`}>
           <Icon name={tile.icon} />
           <div>
@@ -1677,13 +1704,22 @@ function TileActionModal({
         <SpinnerPanel
           tile={tile}
           result={spinnerResult}
-          showPopup={showPopup}
           onSpin={(result) => {
             setSpinnerResult(result);
             const needsTarget = result === 'choose-player';
+            const pickedLabel = spinnerSegmentLabel(tile, result);
             window.setTimeout(() => {
               if (!needsTarget) {
                 submitResult({ spinnerResult: result });
+                window.setTimeout(
+                  () =>
+                    showPopup(
+                      tile.actionConfig?.deathWheel === true ? 'Death Wheel' : 'Spinner',
+                      pickedLabel,
+                      tile.actionConfig?.deathWheel === true ? 'danger' : 'prize',
+                    ),
+                  40,
+                );
               }
             }, 1050);
           }}
@@ -1695,7 +1731,13 @@ function TileActionModal({
           players={getEligibleTargets(game, false)}
           targetId={targetId}
           setTargetId={setTargetId}
-          onApply={(selectedId) => submitResult({ spinnerResult, targetPlayerId: selectedId })}
+          onApply={(selectedId, playerName) => {
+            submitResult({ spinnerResult, targetPlayerId: selectedId });
+            window.setTimeout(
+              () => showPopup('Spinner', `${playerName} receives 2 sips.`, 'danger'),
+              40,
+            );
+          }}
         />
       )}
 
@@ -1719,8 +1761,16 @@ function TileActionModal({
           setCardGuess={setCardGuess}
           showPopup={showPopup}
           onDone={(guess, drawn, correct) => {
-            showPopup(correct ? 'Correct' : 'Incorrect', `${drawn.rank} of ${drawn.suit}`, correct ? 'success' : 'danger');
             submitResult({ cardGuess: guess, cardDraw: drawn });
+            window.setTimeout(
+              () =>
+                showPopup(
+                  correct ? 'Correct' : 'Incorrect',
+                  `${drawn.rank} of ${drawn.suit}`,
+                  correct ? 'success' : 'danger',
+                ),
+              40,
+            );
           }}
         />
       )}
@@ -1773,17 +1823,25 @@ function PlayerSelect({
   value: string;
   onChange: (value: string) => void;
 }) {
+  const selected = players.some((player) => player.id === value) ? value : players[0]?.id;
   return (
-    <label className="select-control">
-      <span>{label}</span>
-      <select value={value} onChange={(event) => onChange(event.target.value)}>
+    <fieldset className="player-button-select">
+      <legend>{label}</legend>
+      <div className="player-choice-grid">
         {players.map((player) => (
-          <option key={player.id} value={player.id}>
+          <button
+            key={player.id}
+            className={`player-choice-button ${selected === player.id ? 'selected' : ''}`}
+            type="button"
+            style={{ '--counter-colour': player.colour } as CSSProperties}
+            aria-pressed={selected === player.id}
+            onClick={() => onChange(player.id)}
+          >
             {player.name}
-          </option>
+          </button>
         ))}
-      </select>
-    </label>
+      </div>
+    </fieldset>
   );
 }
 
@@ -1791,51 +1849,45 @@ function SpinnerPanel({
   tile,
   result,
   onSpin,
-  showPopup,
 }: {
   tile: BoardTile;
   result?: SpinnerSegmentId;
   onSpin: (result: SpinnerSegmentId) => void;
-  showPopup: (title: string, message: string, tone?: PopupTone) => void;
 }) {
-  const segments = tile.actionConfig?.deathWheel === true ? DEATH_WHEEL_SEGMENTS : SPINNER_SEGMENTS;
+  const segments = spinnerSegmentsForTile(tile);
   const [spinning, setSpinning] = useState(false);
-  const angle = result ? weightedSpinnerAngle(segments, result) + 1800 : 0;
+  const [reelItems, setReelItems] = useState(() => buildInitialReel(segments));
+  const [settledIndex, setSettledIndex] = useState(1);
   const label = segments.find((segment) => segment.id === result)?.label ?? 'Ready';
-  const gradient = buildWheelGradient(segments);
   const spin = () => {
     if (spinning || result) {
       return;
     }
     setSpinning(true);
     const picked = pickWeightedSegment(segments);
+    const nextReel = buildSpinReel(segments, picked);
+    setReelItems(nextReel);
+    setSettledIndex(nextReel.length - 2);
     onSpin(picked);
-    const pickedLabel = segments.find((segment) => segment.id === picked)?.label ?? 'Result';
     window.setTimeout(() => {
-      showPopup(tile.actionConfig?.deathWheel === true ? 'Death Wheel' : 'Spinner', pickedLabel, tile.actionConfig?.deathWheel === true ? 'danger' : 'prize');
       setSpinning(false);
-    }, 930);
+    }, 1180);
   };
   return (
     <div className="spinner-panel">
-      <div className="spinner-stage">
-        <span className="spinner-pointer" />
+      <div className="slot-spinner" aria-label="Prize spinner">
         <div
-          className="spinner-wheel"
-          style={{ transform: `rotate(${angle}deg)`, background: gradient }}
+          className={`slot-reel ${spinning ? 'spinning' : ''}`}
+          style={{ '--settled-index': settledIndex } as CSSProperties}
         >
-          {segments.map((segment, index) => (
-          <span
-            key={segment.id}
-            style={
-              {
-                '--segment-colour': segment.colour,
-                '--segment-angle': `${weightedSpinnerLabelAngle(segments, index)}deg`,
-              } as CSSProperties
-            }
-          >
-            {segment.label}
-          </span>
+          {reelItems.map((segment, index) => (
+            <span
+              key={`${segment.id}-${index}`}
+              className="slot-prize"
+              style={{ '--segment-colour': segment.colour } as CSSProperties}
+            >
+              {segment.label}
+            </span>
           ))}
         </div>
       </div>
@@ -1881,28 +1933,34 @@ function SpinnerTargetPanel({
   players: Player[];
   targetId: string;
   setTargetId: (id: string) => void;
-  onApply: (targetId: string) => void;
+  onApply: (targetId: string, playerName: string) => void;
 }) {
   if (players.length === 0) {
     return (
       <div className="mini-card">
         <strong>No target available.</strong>
-        <button className="primary-button" type="button" onClick={() => onApply(targetId)}>
+        <button className="primary-button" type="button" onClick={() => onApply(targetId, 'Current player')}>
           Apply to current player
         </button>
       </div>
     );
   }
   const value = players.some((player) => player.id === targetId) ? targetId : players[0].id;
+  const selectedPlayer = players.find((player) => player.id === value) ?? players[0];
   return (
     <div className="mini-card">
       <PlayerSelect label="Choose who gets 2 sips" players={players} value={value} onChange={setTargetId} />
-      <button className="primary-button" type="button" onClick={() => onApply(value)}>
+      <button className="primary-button" type="button" onClick={() => onApply(value, selectedPlayer.name)}>
         <Icons.Check aria-hidden="true" />
         Apply
       </button>
     </div>
   );
+}
+
+function spinnerSegmentLabel(tile: BoardTile, segmentId: SpinnerSegmentId): string {
+  const segments = spinnerSegmentsForTile(tile);
+  return segments.find((segment) => segment.id === segmentId)?.label ?? 'Result';
 }
 
 const CARD_SUITS = ['spades', 'hearts', 'clubs', 'diamonds'] as const;
@@ -2017,16 +2075,28 @@ function RiskRollPanel({
     window.setTimeout(() => {
       if (isDouble) {
         const success = total >= 7;
-        showPopup(
-          success ? 'Sent Away' : 'Kept It',
-          success ? `${current.name} rolled ${total}.` : `${current.name} rolled ${total}.`,
-          success ? 'success' : 'danger',
-        );
         onDone({ randomOutcomeIndex: success ? 1 : 0, targetPlayerId: targetId });
+        window.setTimeout(
+          () =>
+            showPopup(
+              success ? 'Sent Away' : 'Kept It',
+              `${current.name} rolled ${total}.`,
+              success ? 'success' : 'danger',
+            ),
+          40,
+        );
         return;
       }
-      showPopup('Risk Roll', `${current.name} rolled ${first}: ${riskRollOutcomeText(first, targetId, targets)}.`, first <= 2 ? 'danger' : 'prize');
       onDone({ targetPlayerId: targetId, highRollValue: first });
+      window.setTimeout(
+        () =>
+          showPopup(
+            'Risk Roll',
+            `${current.name} rolled ${first}: ${riskRollOutcomeText(first, targetId, targets)}.`,
+            first <= 2 ? 'danger' : 'prize',
+          ),
+        40,
+      );
     }, 900);
   };
 
@@ -2045,7 +2115,7 @@ function RiskRollPanel({
         ) : (
           <>
             <span>1-2: {current.name} receives 1 shot</span>
-            <span>3-4: safe result</span>
+            <span>3-4: {current.name} receives 1 sip</span>
             <span>5-6: chosen player receives 1 shot</span>
           </>
         )}
@@ -2074,7 +2144,7 @@ function riskRollOutcomeText(roll: number, targetId: string | undefined, players
   if (roll >= 5) {
     return `${target?.name ?? 'chosen player'} receives 1 shot`;
   }
-  return 'safe result';
+  return 'current player receives 1 sip';
 }
 
 function tileOutcomes(tile: BoardTile): Array<{ label: string; hasRandomTarget: boolean }> {
@@ -2102,7 +2172,7 @@ function tileHasRandomAssignment(tile: BoardTile): boolean {
     : false;
 }
 
-function pickWeightedSegment(segments: typeof SPINNER_SEGMENTS): SpinnerSegmentId {
+function pickWeightedSegment(segments: SpinnerSegment[]): SpinnerSegmentId {
   const total = segments.reduce((sum, segment) => sum + segment.weight, 0);
   let cursor = randomSource.integer(1, total);
   for (const segment of segments) {
@@ -2114,29 +2184,32 @@ function pickWeightedSegment(segments: typeof SPINNER_SEGMENTS): SpinnerSegmentI
   return segments[segments.length - 1].id;
 }
 
-function buildWheelGradient(segments: typeof SPINNER_SEGMENTS): string {
-  const total = segments.reduce((sum, segment) => sum + segment.weight, 0);
-  let cursor = 0;
-  const stops = segments.map((segment) => {
-    const start = cursor;
-    cursor += (segment.weight / total) * 360;
-    return `${segment.colour} ${start}deg ${cursor}deg`;
-  });
-  return `conic-gradient(${stops.join(', ')})`;
-}
-
-function weightedSpinnerAngle(segments: typeof SPINNER_SEGMENTS, segmentId: SpinnerSegmentId): number {
-  const index = segments.findIndex((segment) => segment.id === segmentId);
-  if (index < 0) {
-    return getSpinnerAngle(segmentId);
+function spinnerSegmentsForTile(tile: BoardTile): SpinnerSegment[] {
+  if (tile.actionConfig?.deathWheel === true) {
+    return DEATH_WHEEL_SEGMENTS;
   }
-  return weightedSpinnerLabelAngle(segments, index);
+  if (tile.actionConfig?.compact === true) {
+    return JACKPOT_SPINNER_SEGMENTS;
+  }
+  return SPINNER_SEGMENTS;
 }
 
-function weightedSpinnerLabelAngle(segments: typeof SPINNER_SEGMENTS, index: number): number {
-  const total = segments.reduce((sum, segment) => sum + segment.weight, 0);
-  const start = segments.slice(0, index).reduce((sum, segment) => sum + (segment.weight / total) * 360, 0);
-  return start + (segments[index].weight / total) * 180;
+function buildInitialReel(segments: SpinnerSegment[]): SpinnerSegment[] {
+  const middle = segments[0];
+  return [segments[segments.length - 1], middle, segments[1] ?? middle];
+}
+
+function buildSpinReel(
+  segments: SpinnerSegment[],
+  resultId: SpinnerSegmentId,
+): SpinnerSegment[] {
+  const resultIndex = segments.findIndex((segment) => segment.id === resultId);
+  const result = segments[resultIndex] ?? segments[0];
+  const previous = segments[(resultIndex - 1 + segments.length) % segments.length] ?? result;
+  const next = segments[(resultIndex + 1) % segments.length] ?? result;
+  const weightedPool = segments.flatMap((segment) => Array.from({ length: segment.weight }, () => segment));
+  const leadIn = Array.from({ length: 18 }, () => randomSource.pick(weightedPool));
+  return [...leadIn, previous, result, next];
 }
 
 function MinigamePanel({
@@ -2176,11 +2249,8 @@ function MinigamePanel({
   const [sorting] = useState(() => randomSource.pick(SORTING_PUZZLES));
 
   const selectedLoser = loserId ?? players[0]?.id;
-  const selectedWinner = winnerId ?? current.id;
   const manualOutcomeGames: MinigameId[] = [
     'categories',
-    'name-three',
-    'memory-chain',
     'sorting-sprint',
     'bluff-breaker',
     'token-toss',
@@ -2201,7 +2271,7 @@ function MinigamePanel({
             minigameWinnerId: winnerId,
             minigameNoPenalty: noPenalty,
           }),
-        650,
+        80,
       );
       return () => window.clearTimeout(timeout);
     }
@@ -2225,7 +2295,7 @@ function MinigamePanel({
       return;
     }
     if (value === numberTarget) {
-      setGuessMessage('Correct. No penalty is selected.');
+      setGuessMessage('Correct. Challenge cleared.');
       markNoPenalty(current.id);
       showPopup('Correct', 'Number guessed.', 'success');
       setGuess('');
@@ -2295,9 +2365,13 @@ function MinigamePanel({
         </p>
       )}
       {id === 'name-three' && (
-        <p>
-          Name three from <strong>{prompt}</strong> in five seconds.
-        </p>
+        <NameThreeMini
+          current={current}
+          prompt={prompt}
+          markLoser={markLoser}
+          markNoPenalty={markNoPenalty}
+          showPopup={showPopup}
+        />
       )}
       {id === 'dice-duel' && (
         <DiceDuelMini
@@ -2323,18 +2397,23 @@ function MinigamePanel({
         <BlackjackMini current={current} setLoserId={markLoser} markNoPenalty={markNoPenalty} />
       )}
       {id === 'wire-cutter' && (
-        <WireCutterMini current={current} setLoserId={markLoser} markNoPenalty={markNoPenalty} />
+        <WireCutterMini
+          current={current}
+          setLoserId={markLoser}
+          markNoPenalty={markNoPenalty}
+          showPopup={showPopup}
+        />
       )}
       {id === 'lock-picker' && (
         <LockPickerMini current={current} setLoserId={markLoser} markNoPenalty={markNoPenalty} />
       )}
       {id === 'bomb-defuse' && (
-        <BombDefuseMini current={current} setLoserId={markLoser} markNoPenalty={markNoPenalty} />
-      )}
-      {id === 'memory-chain' && (
-        <p>
-          Build a chain from the category <strong>{prompt}</strong>. Mark the first miss below.
-        </p>
+        <BombDefuseMini
+          current={current}
+          setLoserId={markLoser}
+          markNoPenalty={markNoPenalty}
+          showPopup={showPopup}
+        />
       )}
       {id === 'number-guess' && (
         <div className="guess-row">
@@ -2380,40 +2459,20 @@ function MinigamePanel({
 
       {needsManualOutcome && <div className="minigame-outcome">
         <PlayerSelect
-          label="Winner"
-          players={players}
-          value={selectedWinner}
-          onChange={setWinnerId}
-        />
-        <PlayerSelect
           label={`Receives ${drinkWord(1, settings.alcoholFreeMode)}`}
           players={players}
           value={selectedLoser}
           onChange={markLoser}
         />
       </div>}
-      {needsManualOutcome && <label className="checkbox-line">
-        <input
-          type="checkbox"
-          checked={noPenalty}
-          onChange={(event) => {
-            setNoPenalty(event.target.checked);
-            if (event.target.checked) {
-              setLoserId(undefined);
-            }
-          }}
-        />
-        <span>No penalty for this mini-game</span>
-      </label>}
       {needsManualOutcome && (
         <button
           className="primary-button"
           type="button"
           onClick={() =>
             onComplete({
-              minigameLoserId: noPenalty ? undefined : selectedLoser,
-              minigameWinnerId: selectedWinner,
-              minigameNoPenalty: noPenalty,
+              minigameLoserId: selectedLoser,
+              minigameNoPenalty: false,
             })
           }
         >
@@ -2422,6 +2481,55 @@ function MinigamePanel({
         </button>
       )}
     </section>
+  );
+}
+
+function NameThreeMini({
+  current,
+  prompt,
+  markLoser,
+  markNoPenalty,
+  showPopup,
+}: {
+  current: Player;
+  prompt: string;
+  markLoser: (id: string | undefined) => void;
+  markNoPenalty: (winner?: string | undefined) => void;
+  showPopup: (title: string, message: string, tone?: PopupTone) => void;
+}) {
+  const [locked, setLocked] = useState(false);
+  return (
+    <div className="mini-card">
+      <p>
+        Name three from <strong>{prompt}</strong> in five seconds.
+      </p>
+      <div className="choice-card-grid">
+        <button
+          className="choice-card"
+          type="button"
+          disabled={locked}
+          onClick={() => {
+            setLocked(true);
+            markNoPenalty(current.id);
+            showPopup('Name Three', 'Cleared.', 'success');
+          }}
+        >
+          Cleared
+        </button>
+        <button
+          className="choice-card"
+          type="button"
+          disabled={locked}
+          onClick={() => {
+            setLocked(true);
+            markLoser(current.id);
+            showPopup('Name Three', `${current.name} takes the sip.`, 'danger');
+          }}
+        >
+          Missed
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -2572,20 +2680,33 @@ function ReactionTapMini({
   };
 
   return (
-    <button className={`reaction-zone ${state}`} type="button" onClick={registerTap}>
+    <div
+      className={`reaction-zone ${state}`}
+      role="button"
+      tabIndex={state === 'idle' ? -1 : 0}
+      onClick={registerTap}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          registerTap();
+        }
+      }}
+    >
       <strong>{message}</strong>
       <div className="button-row">
-        <span className={`secondary-button ${state !== 'idle' ? 'disabled' : ''}`} role="button" tabIndex={0} onClick={(event) => {
-          event.stopPropagation();
-          if (state !== 'idle') {
-            return;
-          }
-          start();
-        }}>
-        Start
-        </span>
+        <button
+          className="secondary-button"
+          type="button"
+          disabled={state !== 'idle'}
+          onClick={(event) => {
+            event.stopPropagation();
+            start();
+          }}
+        >
+          Start
+        </button>
       </div>
-    </button>
+    </div>
   );
 }
 
@@ -2713,7 +2834,7 @@ function BlackjackMini({
       return;
     }
     if (playerTotal === finalDealer) {
-      win(`Push at ${playerTotal}. No penalty.`);
+      win(`Push at ${playerTotal}. Challenge cleared.`);
       return;
     }
     lose(`Dealer ${finalDealer} beats ${current.name} ${playerTotal}.`);
@@ -2799,10 +2920,12 @@ function WireCutterMini({
   current,
   setLoserId,
   markNoPenalty,
+  showPopup,
 }: {
   current: Player;
   setLoserId: (id: string | undefined) => void;
   markNoPenalty: (winner?: string | undefined) => void;
+  showPopup: (title: string, message: string, tone?: PopupTone) => void;
 }) {
   const wires = useMemo(() => randomSource.shuffle([...rushColours]), []);
   const [correctWire] = useState(() => {
@@ -2831,10 +2954,11 @@ function WireCutterMini({
     const timeout = window.setTimeout(() => {
       setDone(true);
       setLoserId(current.id);
-      setMessage('Time ran out.');
+      setMessage(`Time ran out. ${current.name} takes the sip.`);
+      showPopup('Wire Cutter', `Time ran out. ${current.name} takes the sip.`, 'danger');
     }, 7000);
     return () => window.clearTimeout(timeout);
-  }, [current.id, done, setLoserId]);
+  }, [current.id, current.name, done, setLoserId, showPopup]);
 
   const cut = (wireId: string) => {
     if (done) {
@@ -2937,10 +3061,12 @@ function BombDefuseMini({
   current,
   setLoserId,
   markNoPenalty,
+  showPopup,
 }: {
   current: Player;
   setLoserId: (id: string | undefined) => void;
   markNoPenalty: (winner?: string | undefined) => void;
+  showPopup: (title: string, message: string, tone?: PopupTone) => void;
 }) {
   const [targetButton] = useState(() => randomSource.integer(1, 3));
   const [code] = useState(() => String(randomSource.integer(100, 999)));
@@ -2963,13 +3089,14 @@ function BombDefuseMini({
     const timeout = window.setTimeout(() => {
       setDone(true);
       setLoserId(current.id);
-      setMessage('Bomb timer expired.');
+      setMessage(`Bomb timer expired. ${current.name} takes 2 sips.`);
+      showPopup('Bomb Defuse', `Timer expired. ${current.name} takes 2 sips.`, 'danger');
     }, 9000);
     return () => {
       window.clearInterval(interval);
       window.clearTimeout(timeout);
     };
-  }, [current.id, done, setLoserId, started]);
+  }, [current.id, current.name, done, setLoserId, showPopup, started]);
 
   const fail = (text: string) => {
     setDone(true);
@@ -3176,7 +3303,6 @@ function minigameIcon(id: MinigameId): string {
     'wire-cutter': 'Split',
     'lock-picker': 'Crosshair',
     'bomb-defuse': 'BadgeAlert',
-    'memory-chain': 'Brain',
     'number-guess': 'Hash',
     'trivia-blitz': 'CircleHelp',
     'exact-timer': 'Clock3',
@@ -3420,10 +3546,14 @@ function Modal({
   title,
   className,
   children,
+  onDismiss,
+  dismissOnContentClick = false,
 }: {
   title: string;
   className?: string;
   children: React.ReactNode;
+  onDismiss?: () => void;
+  dismissOnContentClick?: boolean;
 }) {
   const ref = useRef<HTMLDivElement | null>(null);
 
@@ -3435,13 +3565,19 @@ function Modal({
   }, []);
 
   return (
-    <div className="modal-backdrop" role="presentation">
+    <div className="modal-backdrop" role="presentation" onClick={onDismiss}>
       <section
         className={`modal ${className ?? ''}`}
         role="dialog"
         aria-modal="true"
         aria-label={title}
         ref={ref}
+        onClick={(event) => {
+          event.stopPropagation();
+          if (dismissOnContentClick) {
+            onDismiss?.();
+          }
+        }}
       >
         {children}
       </section>
