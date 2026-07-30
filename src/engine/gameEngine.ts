@@ -16,6 +16,7 @@ import {
   type GameState,
   type MinigameId,
   type PendingRoll,
+  type PlayingCard,
   type Placement,
   type Player,
   type PlayerDraft,
@@ -33,6 +34,9 @@ interface RandomOutcome {
   assignments?: Assignment[];
   movement?: number;
 }
+
+const CARD_SUITS = ['spades', 'hearts', 'clubs', 'diamonds'] as const;
+const CARD_RANKS = ['A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'];
 
 interface ValidationResult {
   ok: boolean;
@@ -68,6 +72,7 @@ function cloneState(state: GameState): GameState {
     pendingRoll: state.pendingRoll
       ? { ...state.pendingRoll, path: [...state.pendingRoll.path] }
       : null,
+    bonusTurnPlayerId: state.bonusTurnPlayerId ?? null,
     resolvedTileIdsThisTurn: [...state.resolvedTileIdsThisTurn],
     history: state.history.map((event) => ({ ...event })),
     turnSnapshot: null,
@@ -193,6 +198,7 @@ export function createNewGame(
     globalEffects: [],
     currentTileResolution: null,
     pendingRoll: null,
+    bonusTurnPlayerId: null,
     chainedMovesThisTurn: 0,
     resolvedTileIdsThisTurn: [],
     history: [],
@@ -282,20 +288,26 @@ export function rollDice(
       ...state,
       turnPhase: 'rolling',
       pendingRoll,
+      bonusTurnPlayerId: value === 6 ? current.id : (state.bonusTurnPlayerId ?? null),
       turnSnapshot: snapshotState(state, value),
     },
     `${current.name} rolled ${value}.`,
   );
 
+  const withBonus =
+    value === 6
+      ? addHistory(next, `${current.name} rolled a 6 and earned another turn.`)
+      : next;
+
   return overshotExactFinish
     ? addHistory(
         {
-          ...next,
+          ...withBonus,
           turnPhase: 'confirming-result',
         },
         `${current.name} needed an exact finish and stayed put.`,
       )
-    : next;
+    : withBonus;
 }
 
 export function beginMovement(state: GameState): GameState {
@@ -431,18 +443,25 @@ export function moveToNextTurn(state: GameState): GameState {
   }
 
   const nextIndex = nextActivePlayerIndex(state, state.currentPlayerIndex);
+  const current = getCurrentPlayer(state);
+  const hasBonusTurn = state.bonusTurnPlayerId === current.id && !current.finished;
+  const targetIndex = hasBonusTurn ? state.currentPlayerIndex : nextIndex;
   const clearedPlayers = state.players.map((player) => ({
     ...player,
     temporaryEffects: player.temporaryEffects.filter(
       (effect) => effect.expiresOnTurn > state.turnNumber,
     ),
   }));
-  return startTurn({
+  const prepared = {
     ...state,
     players: clearedPlayers,
-    currentPlayerIndex: nextIndex,
+    currentPlayerIndex: targetIndex,
     turnNumber: state.turnNumber + 1,
-  });
+    bonusTurnPlayerId: hasBonusTurn ? null : (state.bonusTurnPlayerId ?? null),
+  };
+  return startTurn(
+    hasBonusTurn ? addHistory(prepared, `${current.name} takes the bonus turn.`) : prepared,
+  );
 }
 
 export function restartTurn(state: GameState): GameState {
@@ -509,6 +528,7 @@ export function playAgainWithSamePlayers(state: GameState): GameState {
     globalEffects: [],
     currentTileResolution: null,
     pendingRoll: null,
+    bonusTurnPlayerId: null,
     chainedMovesThisTurn: 0,
     resolvedTileIdsThisTurn: [],
     history: [],
@@ -681,8 +701,50 @@ function applyAssignment(
 
     const targetAfter = result.players.find((player) => player.id === target.id) ?? target;
     const messages = assignmentMessages(target.name, targetAfter, scaledAssignment, settings);
-    return messages.reduce((messageState, message) => addHistory(messageState, message), result);
+    const withMessages = messages.reduce(
+      (messageState, message) => addHistory(messageState, message),
+      result,
+    );
+    return applyBuddySpillover(withMessages, targetAfter, scaledAssignment, settings);
   }, state);
+}
+
+function applyBuddySpillover(
+  state: GameState,
+  target: Player,
+  assignment: Assignment,
+  settings: GameSettings,
+): GameState {
+  const drinkCount = assignment.drinks ?? 0;
+  if (drinkCount <= 0) {
+    return state;
+  }
+  const buddyEffect = target.temporaryEffects.find(
+    (effect) => effect.type === 'buddy' && effect.linkedPlayerId,
+  );
+  if (!buddyEffect?.linkedPlayerId) {
+    return state;
+  }
+  const buddy = state.players.find(
+    (player) => player.id === buddyEffect.linkedPlayerId && !player.finished,
+  );
+  if (!buddy || buddy.id === target.id) {
+    return state;
+  }
+  const updated = updatePlayer(state, buddy.id, (player) => ({
+    ...player,
+    drinks: player.drinks + 1,
+    statistics: {
+      ...player.statistics,
+      largestSingleAssignment: Math.max(player.statistics.largestSingleAssignment, 1),
+    },
+  }));
+  return addHistory(
+    updated,
+    `${buddy.name} matched ${target.name}'s buddy sip. Total: ${
+      (updated.players.find((player) => player.id === buddy.id) ?? buddy).drinks
+    } ${drinkWord(2, settings.alcoholFreeMode)}.`,
+  );
 }
 
 function scaleAssignmentForDifficulty(
@@ -914,8 +976,8 @@ export const tileActionHandlers: Record<BoardTile['actionType'], TileActionHandl
       const current = getCurrentPlayer(state);
       if (current.shields > 0) {
         return resolveAssignments(
-          state,
-          [{ target: 'chosen', drinks: 1 }],
+          addHistory(state, `${current.name}'s Shield Check passed.`),
+          [{ target: 'current', shields: 1 }],
           settings,
           random,
           choice,
@@ -931,7 +993,12 @@ export const tileActionHandlers: Record<BoardTile['actionType'], TileActionHandl
     }
 
     const outcomes = getOutcomes(tile);
-    const outcome = outcomes.length > 0 ? random.pick(outcomes) : undefined;
+    const outcome =
+      typeof choice.randomOutcomeIndex === 'number'
+        ? outcomes[choice.randomOutcomeIndex]
+        : outcomes.length > 0
+          ? random.pick(outcomes)
+          : undefined;
     if (!outcome) {
       return addHistory(state, `${tile.title} had no effect.`);
     }
@@ -970,18 +1037,25 @@ export const tileActionHandlers: Record<BoardTile['actionType'], TileActionHandl
     );
   },
   'card-guess': (state, tile, settings, random, choice) => {
-    const correct = random.integer(0, 1) === 1;
+    const drawn = choice.cardDraw ?? drawPlayingCard(random);
+    const guess = choice.cardGuess ?? 'red';
+    const colour = cardColour(drawn.suit);
+    const correct = guess === colour || guess === drawn.suit;
     const drinks = getNumber(tile.actionConfig, 'drinks', 1);
+    const withDraw = addHistory(
+      state,
+      `Card drawn: ${drawn.rank} of ${drawn.suit}. ${correct ? 'Correct guess.' : 'Incorrect guess.'}`,
+    );
     return correct
       ? resolveAssignments(
-          addHistory(state, 'Card prediction was correct.'),
+          withDraw,
           [{ target: 'chosen', drinks }],
           settings,
           random,
           choice,
         )
       : resolveAssignments(
-          addHistory(state, 'Card prediction missed.'),
+          withDraw,
           [{ target: 'current', drinks }],
           settings,
           random,
@@ -989,7 +1063,7 @@ export const tileActionHandlers: Record<BoardTile['actionType'], TileActionHandl
         );
   },
   'high-roller': (state, tile, settings, random, choice) => {
-    const roll = random.integer(1, 6);
+    const roll = choice.highRollValue ?? random.integer(1, 6);
     const lateGame = tile.actionConfig?.lateGame === true;
     const withRoll = addHistory(state, `Bonus die rolled ${roll}.`);
     if (lateGame) {
@@ -1037,6 +1111,17 @@ export const tileActionHandlers: Record<BoardTile['actionType'], TileActionHandl
     addHistory(state, `${tile.title}: ${String(tile.actionConfig?.message ?? 'No effect.')}`),
 };
 
+function drawPlayingCard(random: RandomSource): PlayingCard {
+  return {
+    rank: random.pick(CARD_RANKS),
+    suit: random.pick(CARD_SUITS),
+  };
+}
+
+function cardColour(suit: 'spades' | 'hearts' | 'clubs' | 'diamonds'): 'red' | 'black' {
+  return suit === 'hearts' || suit === 'diamonds' ? 'red' : 'black';
+}
+
 function resolveSpinnerResult(
   state: GameState,
   segmentId: SpinnerSegmentId,
@@ -1070,6 +1155,22 @@ function resolveSpinnerResult(
         random,
         choice,
       );
+    case 'two-shots':
+      return resolveAssignments(
+        withHistory,
+        [{ target: 'current', shots: 2 }],
+        settings,
+        random,
+        choice,
+      );
+    case 'chug':
+      return resolveAssignments(
+        withHistory,
+        [{ target: 'current', drinks: 10 }],
+        settings,
+        random,
+        choice,
+      );
     case 'choose-player':
       return resolveAssignments(
         withHistory,
@@ -1082,6 +1183,14 @@ function resolveSpinnerResult(
       return resolveAssignments(
         withHistory,
         [{ target: 'everyone', drinks: 1 }],
+        settings,
+        random,
+        choice,
+      );
+    case 'everyone-shot':
+      return resolveAssignments(
+        withHistory,
+        [{ target: 'everyone', shots: 1 }],
         settings,
         random,
         choice,
@@ -1124,8 +1233,13 @@ export function getSpinnerAngle(segmentId: SpinnerSegmentId): number {
   if (index < 0) {
     throw new Error('Invalid spinner segment');
   }
-  const segmentSize = 360 / SPINNER_SEGMENTS.length;
-  return index * segmentSize + segmentSize / 2;
+  const total = SPINNER_SEGMENTS.reduce((sum, segment) => sum + segment.weight, 0);
+  const start = SPINNER_SEGMENTS.slice(0, index).reduce(
+    (sum, segment) => sum + (segment.weight / total) * 360,
+    0,
+  );
+  const segmentSize = (SPINNER_SEGMENTS[index].weight / total) * 360;
+  return start + segmentSize / 2;
 }
 
 function applyMovementTile(
@@ -1185,12 +1299,11 @@ function applyMovementOffset(state: GameState, offset: number, settings: GameSet
   const tile = getTileById(target);
   if (
     tile &&
-    tile.actionType === 'movement' &&
     !state.resolvedTileIdsThisTurn.includes(tile.id) &&
     state.chainedMovesThisTurn + 1 < MAX_CHAINED_MOVES
   ) {
     return {
-      ...moved,
+      ...addHistory(moved, `${current.name} activates ${tile.title} after the move.`),
       turnPhase: 'resolving-tile',
       currentTileResolution: tileToResolution(tile, moved.turnNumber),
       chainedMovesThisTurn: moved.chainedMovesThisTurn + 1,

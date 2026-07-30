@@ -172,6 +172,7 @@ export interface GameState {
   globalEffects: GlobalEffect[];
   currentTileResolution: TileResolution | null;
   pendingRoll: PendingRoll | null;
+  bonusTurnPlayerId?: string | null;
   chainedMovesThisTurn: number;
   resolvedTileIdsThisTurn: number[];
   history: GameEvent[];
@@ -238,14 +239,21 @@ export interface TileChoice {
   minigameNoPenalty?: boolean;
   skip?: boolean;
   spinnerResult?: SpinnerSegmentId;
+  highRollValue?: number;
+  randomOutcomeIndex?: number;
+  cardGuess?: 'red' | 'black' | 'spades' | 'hearts' | 'clubs' | 'diamonds';
+  cardDraw?: PlayingCard;
 }
 
 export type SpinnerSegmentId =
   | 'one-drink'
   | 'two-drinks'
   | 'one-shot'
+  | 'two-shots'
+  | 'chug'
   | 'choose-player'
   | 'all-players'
+  | 'everyone-shot'
   | 'shield'
   | 'safe'
   | 'spin-again';
@@ -255,6 +263,11 @@ export interface SpinnerSegment {
   label: string;
   weight: number;
   colour: string;
+}
+
+export interface PlayingCard {
+  rank: string;
+  suit: 'spades' | 'hearts' | 'clubs' | 'diamonds';
 }
 
 export const COUNTER_SYMBOLS = [

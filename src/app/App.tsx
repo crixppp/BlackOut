@@ -76,10 +76,11 @@ import {
   Zap,
   type LucideIcon,
 } from 'lucide-react';
-import { BOARD_TILES, SPINNER_SEGMENTS, getTileById } from '../data/tiles';
+import { BOARD_TILES, DEATH_WHEEL_SEGMENTS, SPINNER_SEGMENTS, getTileById } from '../data/tiles';
 import { CATEGORY_PROMPTS, SORTING_PUZZLES, TRIVIA_QUESTIONS } from '../data/prompts';
 import {
   advanceMovementToEnd,
+  applyManualAdjustment,
   beginMovement,
   createNewGame,
   createPlayerDraft,
@@ -87,7 +88,6 @@ import {
   getEligibleTargets,
   getSpinnerAngle,
   moveToNextTurn,
-  pickSpinnerSegment,
   playAgainWithSamePlayers,
   resolveCurrentTile,
   restartTurn,
@@ -111,6 +111,7 @@ import {
   type MinigameId,
   type Player,
   type PlayerDraft,
+  type PlayingCard,
   type ScreenName,
   type SpinnerSegmentId,
   type TileChoice,
@@ -226,6 +227,15 @@ const BOARD_PATH_HEIGHT =
   BOARD_PATH_PADDING * 2 +
   BOARD_PATH_ROWS * BOARD_PATH_TILE_SIZE +
   (BOARD_PATH_ROWS - 1) * BOARD_PATH_Y_GAP;
+
+type PopupTone = 'info' | 'success' | 'danger' | 'prize';
+
+interface GamePopup {
+  id: string;
+  title: string;
+  message: string;
+  tone: PopupTone;
+}
 
 function Icon({ name, label }: { name: string; label?: string }) {
   const LucideIcon = ICONS[name] ?? ICONS.Circle;
@@ -930,6 +940,24 @@ function GameScreen({
   wakeLocked: boolean;
 }) {
   const current = getCurrentPlayer(game);
+  const [popup, setPopup] = useState<GamePopup | null>(null);
+  const popupTimeoutRef = useRef<number | null>(null);
+
+  const showPopup = useCallback((title: string, message: string, tone: PopupTone = 'info') => {
+    if (popupTimeoutRef.current) {
+      window.clearTimeout(popupTimeoutRef.current);
+    }
+    setPopup({ id: `${Date.now()}-${Math.random()}`, title, message, tone });
+    popupTimeoutRef.current = window.setTimeout(() => setPopup(null), 2100);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (popupTimeoutRef.current) {
+        window.clearTimeout(popupTimeoutRef.current);
+      }
+    };
+  }, []);
 
   return (
     <main className="game-screen">
@@ -951,10 +979,11 @@ function GameScreen({
 
       <Board game={game} settings={settings} />
 
-      <GameControlDock game={game} settings={settings} setGame={setGame} />
+      <GameControlDock game={game} settings={settings} setGame={setGame} showPopup={showPopup} />
       {game.currentTileResolution && (
-        <TileActionModal game={game} settings={settings} setGame={setGame} />
+        <TileActionModal game={game} settings={settings} setGame={setGame} showPopup={showPopup} />
       )}
+      <PopupOverlay popup={popup} />
       {pauseOpen && (
         <PauseMenu
           game={game}
@@ -1173,10 +1202,12 @@ function GameControlDock({
   game,
   settings,
   setGame,
+  showPopup,
 }: {
   game: GameState;
   settings: GameSettings;
   setGame: React.Dispatch<React.SetStateAction<GameState | null>>;
+  showPopup: (title: string, message: string, tone?: PopupTone) => void;
 }) {
   const current = getCurrentPlayer(game);
   const [announced, setAnnounced] = useState('');
@@ -1184,8 +1215,11 @@ function GameControlDock({
   useEffect(() => {
     if (game.pendingRoll) {
       setAnnounced(`${current.name} rolled a ${game.pendingRoll.value}.`);
+      if (game.pendingRoll.value === 6 && game.turnPhase === 'rolling') {
+        showPopup('Bonus Turn', `${current.name} rolled a 6. They go again after this tile.`, 'prize');
+      }
     }
-  }, [current.name, game.pendingRoll]);
+  }, [current.name, game.pendingRoll, game.turnPhase, showPopup]);
 
   if (game.turnPhase === 'game-complete') {
     return null;
@@ -1261,10 +1295,15 @@ function GameControlDock({
           <button
             className="primary-button"
             type="button"
-            onClick={() => setGame((state) => (state ? moveToNextTurn(state) : state))}
+            onClick={() => {
+              if (game.bonusTurnPlayerId === current.id) {
+                showPopup('Bonus Turn', `${current.name} keeps the device.`, 'prize');
+              }
+              setGame((state) => (state ? moveToNextTurn(state) : state));
+            }}
           >
             <Icons.ArrowRight aria-hidden="true" />
-            Next Player
+            {game.bonusTurnPlayerId === current.id ? 'Bonus Turn' : 'Next Player'}
           </button>
         )}
       </div>
@@ -1292,6 +1331,9 @@ function rollStatus(game: GameState): { title: string; detail: string } {
         detail: `${current.name} stays on space ${current.position}.`,
       };
     case 'turn-complete':
+      if (game.bonusTurnPlayerId === current.id) {
+        return { title: 'Bonus turn', detail: `${current.name} rolled a 6 and goes again.` };
+      }
       return { title: 'Turn complete', detail: 'Pass to the next player.' };
     default:
       return { title: 'In progress', detail: `Turn ${game.turnNumber}` };
@@ -1336,14 +1378,28 @@ function DiceRollIndicator({ value, rolling }: { value: number; rolling: boolean
   );
 }
 
+function PopupOverlay({ popup }: { popup: GamePopup | null }) {
+  if (!popup) {
+    return null;
+  }
+  return (
+    <div className={`game-popup tone-${popup.tone}`} role="status" aria-live="polite">
+      <strong>{popup.title}</strong>
+      <span>{popup.message}</span>
+    </div>
+  );
+}
+
 function TileActionModal({
   game,
   settings,
   setGame,
+  showPopup,
 }: {
   game: GameState;
   settings: GameSettings;
   setGame: React.Dispatch<React.SetStateAction<GameState | null>>;
+  showPopup: (title: string, message: string, tone?: PopupTone) => void;
 }) {
   const resolution = game.currentTileResolution;
   const tile = resolution ? getTileById(resolution.tileId) : undefined;
@@ -1357,8 +1413,10 @@ function TileActionModal({
   const [minigameLoserId, setMinigameLoserId] = useState<string | undefined>();
   const [minigameWinnerId, setMinigameWinnerId] = useState<string | undefined>();
   const [minigameNoPenalty, setMinigameNoPenalty] = useState(false);
-  const [revealReady, setRevealReady] = useState(settings.reducedMotion);
+  const [previewVisible, setPreviewVisible] = useState(true);
   const [challengeStarted, setChallengeStarted] = useState(false);
+  const [cardDraw, setCardDraw] = useState<PlayingCard | null>(null);
+  const [cardGuess, setCardGuess] = useState<TileChoice['cardGuess']>();
   const actionSubmittedRef = useRef(false);
   const targetIncludesCurrent =
     !tile || (tile.actionType !== 'choice' && tile.actionType !== 'buddy')
@@ -1378,27 +1436,51 @@ function TileActionModal({
 
   useEffect(() => {
     setChallengeStarted(false);
-    setRevealReady(settings.reducedMotion);
-    if (settings.reducedMotion) {
-      return;
-    }
-    const timeout = window.setTimeout(() => setRevealReady(true), 700);
+    setPreviewVisible(true);
+    setSpinnerResult(undefined);
+    setMinigameLoserId(undefined);
+    setMinigameWinnerId(undefined);
+    setMinigameNoPenalty(false);
+    setCardDraw(null);
+    setCardGuess(undefined);
+    actionSubmittedRef.current = false;
+    const timeout = window.setTimeout(
+      () => {
+        setPreviewVisible(false);
+        setChallengeStarted(true);
+      },
+      settings.reducedMotion ? 300 : 2000,
+    );
     return () => window.clearTimeout(timeout);
   }, [resolution?.startedAtTurn, resolution?.tileId, settings.reducedMotion]);
 
-  if (!tile) {
-    return null;
-  }
-
-  const display = settings.alcoholFreeMode ? tile.alcoholFreeText : tile;
+  const display = tile
+    ? settings.alcoholFreeMode
+      ? tile.alcoholFreeText
+      : tile
+    : { title: 'Tile', description: '' };
   const selectedPlayer = game.players.find((player) => player.id === targetId) ?? targets[0];
   const canUseShield =
     selectedPlayer && (selectedPlayer.shields > 0 || selectedPlayer.goldenShields > 0);
-  const isMinigame = tile.actionType === 'minigame';
-  const isSpinner = tile.actionType === 'spinner';
+  const isMinigame = tile?.actionType === 'minigame';
+  const isSpinner = tile?.actionType === 'spinner';
+  const needsPlayerChoice =
+    tile?.actionType === 'choice' || tile?.actionType === 'vote' || tile?.actionType === 'buddy';
+  const needsOutcomeChoice =
+    tile?.actionType === 'random-outcome' && tile.actionConfig?.chooseOutcome === true;
+  const needsCardGuess = tile?.actionType === 'card-guess';
+  const needsHighRoll = tile?.actionType === 'high-roller' || tile?.id === 23;
+  const autoResolvable =
+    Boolean(tile) &&
+    !isMinigame &&
+    !isSpinner &&
+    !needsPlayerChoice &&
+    !needsOutcomeChoice &&
+    !needsCardGuess &&
+    !needsHighRoll;
 
   const resolve = (extra: TileChoice = {}) => {
-    if (actionSubmittedRef.current) {
+    if (actionSubmittedRef.current || !tile) {
       return;
     }
     actionSubmittedRef.current = true;
@@ -1409,6 +1491,8 @@ function TileActionModal({
       secondaryTargetPlayerId: effectiveSecondaryTargetId,
       shieldUsedByPlayerId: shieldTargetId,
       spinnerResult,
+      cardDraw: cardDraw ?? undefined,
+      cardGuess,
       minigameLoserId,
       minigameWinnerId,
       minigameNoPenalty,
@@ -1421,11 +1505,18 @@ function TileActionModal({
     resolve(extra);
   };
 
-  if (!revealReady) {
+  useEffect(() => {
+    if (!previewVisible && challengeStarted && autoResolvable && !actionSubmittedRef.current) {
+      showPopup(display.title, display.description, tile?.category === 'shot' ? 'danger' : 'info');
+      resolve();
+    }
+  });
+
+  if (!tile) {
     return null;
   }
 
-  if (!challengeStarted) {
+  if (previewVisible || !challengeStarted) {
     return (
       <Modal title={display.title} className="tile-modal reveal-modal">
         <div className={`tile-banner variant-${tile.backgroundVariant}`}>
@@ -1439,26 +1530,12 @@ function TileActionModal({
           <span>{tile.actionType === 'minigame' ? 'Challenge' : 'Tile'}</span>
           <p>{display.description}</p>
         </div>
-        <div className="modal-actions">
-          <button
-            className="secondary-button"
-            type="button"
-            onClick={() => submitResult({ skip: true })}
-          >
-            <Icons.SkipForward aria-hidden="true" />
-            Skip
-          </button>
-          <button
-            className="primary-button"
-            type="button"
-            onClick={() => setChallengeStarted(true)}
-          >
-            <Icons.Play aria-hidden="true" />
-            Start Challenge
-          </button>
-        </div>
       </Modal>
     );
+  }
+
+  if (autoResolvable) {
+    return null;
   }
 
   return (
@@ -1472,11 +1549,7 @@ function TileActionModal({
       </div>
       <p className="tile-description">{display.description}</p>
 
-      {(tile.actionType === 'choice' ||
-        tile.actionType === 'vote' ||
-        tile.actionType === 'card-guess' ||
-        tile.actionType === 'high-roller' ||
-        tile.actionType === 'random-outcome') && (
+      {(tile.actionType === 'choice' || tile.actionType === 'vote' || tile.actionType === 'buddy') && (
         <PlayerSelect
           label="Selected player"
           players={targets}
@@ -1496,8 +1569,49 @@ function TileActionModal({
 
       {isSpinner && (
         <SpinnerPanel
+          tile={tile}
           result={spinnerResult}
-          onSpin={() => setSpinnerResult(pickSpinnerSegment(randomSource))}
+          showPopup={showPopup}
+          onSpin={(result) => {
+            setSpinnerResult(result);
+            window.setTimeout(() => submitResult({ spinnerResult: result }), 1050);
+          }}
+        />
+      )}
+
+      {needsOutcomeChoice && (
+        <OutcomeChoicePanel
+          tile={tile}
+          onChoose={(index, label) => {
+            showPopup(label, 'Choice applied.', 'prize');
+            submitResult({ randomOutcomeIndex: index });
+          }}
+        />
+      )}
+
+      {needsCardGuess && (
+        <CardGuessPanel
+          tile={tile}
+          current={current}
+          cardDraw={cardDraw}
+          setCardDraw={setCardDraw}
+          cardGuess={cardGuess}
+          setCardGuess={setCardGuess}
+          showPopup={showPopup}
+          onDone={(guess, drawn, correct) => {
+            showPopup(correct ? 'Correct' : 'Incorrect', `${drawn.rank} of ${drawn.suit}`, correct ? 'success' : 'danger');
+            submitResult({ cardGuess: guess, cardDraw: drawn });
+          }}
+        />
+      )}
+
+      {needsHighRoll && (
+        <RiskRollPanel
+          tile={tile}
+          current={current}
+          targets={targets}
+          showPopup={showPopup}
+          onDone={(choice) => submitResult(choice)}
         />
       )}
 
@@ -1513,6 +1627,7 @@ function TileActionModal({
           setWinnerId={setMinigameWinnerId}
           noPenalty={minigameNoPenalty}
           setNoPenalty={setMinigameNoPenalty}
+          showPopup={showPopup}
         />
       )}
 
@@ -1529,7 +1644,7 @@ function TileActionModal({
         </label>
       )}
 
-      <div className="modal-actions">
+      {!isSpinner && !needsOutcomeChoice && !needsCardGuess && !needsHighRoll && <div className="modal-actions">
         <button
           className="secondary-button"
           type="button"
@@ -1542,7 +1657,7 @@ function TileActionModal({
           <Icons.Check aria-hidden="true" />
           Confirm Result
         </button>
-      </div>
+      </div>}
     </Modal>
   );
 }
@@ -1572,31 +1687,279 @@ function PlayerSelect({
   );
 }
 
-function SpinnerPanel({ result, onSpin }: { result?: SpinnerSegmentId; onSpin: () => void }) {
-  const angle = result ? getSpinnerAngle(result) + 1440 : 0;
-  const label = SPINNER_SEGMENTS.find((segment) => segment.id === result)?.label ?? 'Ready';
+function SpinnerPanel({
+  tile,
+  result,
+  onSpin,
+  showPopup,
+}: {
+  tile: BoardTile;
+  result?: SpinnerSegmentId;
+  onSpin: (result: SpinnerSegmentId) => void;
+  showPopup: (title: string, message: string, tone?: PopupTone) => void;
+}) {
+  const segments = tile.actionConfig?.deathWheel === true ? DEATH_WHEEL_SEGMENTS : SPINNER_SEGMENTS;
+  const [spinning, setSpinning] = useState(false);
+  const angle = result ? weightedSpinnerAngle(segments, result) + 1800 : 0;
+  const label = segments.find((segment) => segment.id === result)?.label ?? 'Ready';
+  const gradient = buildWheelGradient(segments);
+  const spin = () => {
+    if (spinning || result) {
+      return;
+    }
+    setSpinning(true);
+    const picked = pickWeightedSegment(segments);
+    onSpin(picked);
+    const pickedLabel = segments.find((segment) => segment.id === picked)?.label ?? 'Result';
+    window.setTimeout(() => {
+      showPopup(tile.actionConfig?.deathWheel === true ? 'Death Wheel' : 'Spinner', pickedLabel, tile.actionConfig?.deathWheel === true ? 'danger' : 'prize');
+      setSpinning(false);
+    }, 930);
+  };
   return (
     <div className="spinner-panel">
-      <div className="spinner-wheel" style={{ transform: `rotate(${angle}deg)` }}>
-        {SPINNER_SEGMENTS.map((segment, index) => (
+      <div className="spinner-stage">
+        <span className="spinner-pointer" />
+        <div
+          className="spinner-wheel"
+          style={{ transform: `rotate(${angle}deg)`, background: gradient }}
+        >
+          {segments.map((segment, index) => (
           <span
             key={segment.id}
             style={
               {
                 '--segment-colour': segment.colour,
-                '--segment-index': index,
+                '--segment-angle': `${weightedSpinnerLabelAngle(segments, index)}deg`,
               } as CSSProperties
             }
-          />
-        ))}
+          >
+            {segment.label}
+          </span>
+          ))}
+        </div>
       </div>
-      <button className="secondary-button" type="button" onClick={onSpin}>
+      <button className="secondary-button" type="button" disabled={spinning || Boolean(result)} onClick={spin}>
         <Icons.RotateCw aria-hidden="true" />
-        Spin
+        {spinning ? 'Spinning' : 'Spin'}
       </button>
       <strong>{label}</strong>
     </div>
   );
+}
+
+function OutcomeChoicePanel({
+  tile,
+  onChoose,
+}: {
+  tile: BoardTile;
+  onChoose: (index: number, label: string) => void;
+}) {
+  const outcomes = tileOutcomes(tile);
+  return (
+    <div className="choice-card-grid">
+      {outcomes.map((outcome, index) => (
+        <button
+          key={outcome.label}
+          className="choice-card"
+          type="button"
+          onClick={() => onChoose(index, outcome.label)}
+        >
+          <strong>{outcome.label}</strong>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+const CARD_SUITS = ['spades', 'hearts', 'clubs', 'diamonds'] as const;
+const CARD_RANKS = ['A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'];
+
+function drawUiCard(): PlayingCard {
+  return {
+    rank: randomSource.pick(CARD_RANKS),
+    suit: randomSource.pick(CARD_SUITS),
+  };
+}
+
+function cardSuitSymbol(suit: PlayingCard['suit']): string {
+  return { spades: '♠', hearts: '♥', clubs: '♣', diamonds: '♦' }[suit];
+}
+
+function cardColour(suit: PlayingCard['suit']): 'red' | 'black' {
+  return suit === 'hearts' || suit === 'diamonds' ? 'red' : 'black';
+}
+
+function CardGuessPanel({
+  tile,
+  cardDraw,
+  setCardDraw,
+  cardGuess,
+  setCardGuess,
+  onDone,
+}: {
+  tile: BoardTile;
+  current: Player;
+  cardDraw: PlayingCard | null;
+  setCardDraw: (card: PlayingCard | null) => void;
+  cardGuess: TileChoice['cardGuess'];
+  setCardGuess: (guess: TileChoice['cardGuess']) => void;
+  showPopup: (title: string, message: string, tone?: PopupTone) => void;
+  onDone: (guess: NonNullable<TileChoice['cardGuess']>, drawn: PlayingCard, correct: boolean) => void;
+}) {
+  const suitMode = tile.actionConfig?.suitMode === true;
+  const options = suitMode
+    ? (['spades', 'hearts', 'clubs', 'diamonds'] as const)
+    : (['red', 'black'] as const);
+  const choose = (guess: NonNullable<TileChoice['cardGuess']>) => {
+    if (cardDraw) {
+      return;
+    }
+    const drawn = drawUiCard();
+    setCardGuess(guess);
+    setCardDraw(drawn);
+    const correct = suitMode ? guess === drawn.suit : guess === cardColour(drawn.suit);
+    window.setTimeout(() => onDone(guess, drawn, correct), 850);
+  };
+  return (
+    <div className="card-game-panel">
+      <div className={`playing-card ${cardDraw ? cardColour(cardDraw.suit) : 'back'}`}>
+        {cardDraw ? (
+          <>
+            <span>{cardDraw.rank}</span>
+            <strong>{cardSuitSymbol(cardDraw.suit)}</strong>
+            <span>{cardDraw.rank}</span>
+          </>
+        ) : (
+          <strong>?</strong>
+        )}
+      </div>
+      <div className="choice-card-grid">
+        {options.map((option) => (
+          <button
+            key={option}
+            className={`choice-card suit-${option} ${cardGuess === option ? 'selected' : ''}`}
+            type="button"
+            disabled={Boolean(cardDraw)}
+            onClick={() => choose(option)}
+          >
+            <strong>{option}</strong>
+            {option !== 'red' && option !== 'black' && <span>{cardSuitSymbol(option)}</span>}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function RiskRollPanel({
+  tile,
+  current,
+  targets,
+  showPopup,
+  onDone,
+}: {
+  tile: BoardTile;
+  current: Player;
+  targets: Player[];
+  showPopup: (title: string, message: string, tone?: PopupTone) => void;
+  onDone: (choice: TileChoice) => void;
+}) {
+  const isDouble = tile.id === 23;
+  const [rolling, setRolling] = useState(false);
+  const [values, setValues] = useState<[number, number]>([1, 1]);
+  const [targetId, setTargetId] = useState(targets.find((player) => player.id !== current.id)?.id ?? targets[0]?.id);
+
+  const roll = () => {
+    if (rolling) {
+      return;
+    }
+    setRolling(true);
+    const first = randomSource.integer(1, 6);
+    const second = isDouble ? randomSource.integer(1, 6) : 0;
+    const displaySecond = isDouble ? second : 1;
+    const total = first + second;
+    setValues([first, displaySecond]);
+    window.setTimeout(() => {
+      if (isDouble) {
+        const success = total >= 7;
+        showPopup(
+          success ? 'Sent Away' : 'Kept It',
+          success ? `${current.name} rolled ${total}.` : `${current.name} rolled ${total}.`,
+          success ? 'success' : 'danger',
+        );
+        onDone({ randomOutcomeIndex: success ? 1 : 0, targetPlayerId: targetId });
+        return;
+      }
+      showPopup('Risk Roll', `${current.name} rolled ${first}.`, first <= 2 ? 'danger' : 'prize');
+      onDone({ targetPlayerId: targetId, highRollValue: first });
+    }, 900);
+  };
+
+  return (
+    <div className="mini-card risk-roll-panel">
+      <div className="duel-dice-row">
+        <DiceRollIndicator value={values[0]} rolling={rolling} />
+        {isDouble && <DiceRollIndicator value={values[1]} rolling={rolling} />}
+      </div>
+      <PlayerSelect
+        label={isDouble ? 'Send sips to' : 'Reward target'}
+        players={targets}
+        value={targetId ?? current.id}
+        onChange={setTargetId}
+      />
+      <button className="secondary-button" type="button" disabled={rolling} onClick={roll}>
+        <Icons.Dices aria-hidden="true" />
+        Roll
+      </button>
+    </div>
+  );
+}
+
+function tileOutcomes(tile: BoardTile): Array<{ label: string }> {
+  const outcomes = tile.actionConfig?.outcomes;
+  return Array.isArray(outcomes)
+    ? outcomes.filter((outcome): outcome is { label: string } => {
+        return Boolean(outcome) && typeof outcome === 'object' && typeof (outcome as { label?: unknown }).label === 'string';
+      })
+    : [];
+}
+
+function pickWeightedSegment(segments: typeof SPINNER_SEGMENTS): SpinnerSegmentId {
+  const total = segments.reduce((sum, segment) => sum + segment.weight, 0);
+  let cursor = randomSource.integer(1, total);
+  for (const segment of segments) {
+    cursor -= segment.weight;
+    if (cursor <= 0) {
+      return segment.id;
+    }
+  }
+  return segments[segments.length - 1].id;
+}
+
+function buildWheelGradient(segments: typeof SPINNER_SEGMENTS): string {
+  const total = segments.reduce((sum, segment) => sum + segment.weight, 0);
+  let cursor = 0;
+  const stops = segments.map((segment) => {
+    const start = cursor;
+    cursor += (segment.weight / total) * 360;
+    return `${segment.colour} ${start}deg ${cursor}deg`;
+  });
+  return `conic-gradient(${stops.join(', ')})`;
+}
+
+function weightedSpinnerAngle(segments: typeof SPINNER_SEGMENTS, segmentId: SpinnerSegmentId): number {
+  const index = segments.findIndex((segment) => segment.id === segmentId);
+  if (index < 0) {
+    return getSpinnerAngle(segmentId);
+  }
+  return weightedSpinnerLabelAngle(segments, index);
+}
+
+function weightedSpinnerLabelAngle(segments: typeof SPINNER_SEGMENTS, index: number): number {
+  const total = segments.reduce((sum, segment) => sum + segment.weight, 0);
+  const start = segments.slice(0, index).reduce((sum, segment) => sum + (segment.weight / total) * 360, 0);
+  return start + (segments[index].weight / total) * 180;
 }
 
 function MinigamePanel({
@@ -1609,6 +1972,7 @@ function MinigamePanel({
   setWinnerId,
   noPenalty,
   setNoPenalty,
+  showPopup,
 }: {
   id: MinigameId;
   game: GameState;
@@ -1619,6 +1983,7 @@ function MinigamePanel({
   setWinnerId: (id: string | undefined) => void;
   noPenalty: boolean;
   setNoPenalty: (value: boolean) => void;
+  showPopup: (title: string, message: string, tone?: PopupTone) => void;
 }) {
   const players = getEligibleTargets(game, true);
   const current = getCurrentPlayer(game);
@@ -1633,11 +1998,15 @@ function MinigamePanel({
 
   const selectedLoser = loserId ?? players[0]?.id;
   const selectedWinner = winnerId ?? current.id;
-
-  const pickRandomLoser = () => {
-    setNoPenalty(false);
-    setLoserId(randomSource.pick(players).id);
-  };
+  const manualOutcomeGames: MinigameId[] = [
+    'categories',
+    'name-three',
+    'memory-chain',
+    'sorting-sprint',
+    'bluff-breaker',
+    'token-toss',
+  ];
+  const needsManualOutcome = manualOutcomeGames.includes(id);
 
   const markLoser = (id: string | undefined) => {
     setNoPenalty(false);
@@ -1659,6 +2028,8 @@ function MinigamePanel({
     if (value === numberTarget) {
       setGuessMessage('Correct. No penalty is selected.');
       markNoPenalty(current.id);
+      showPopup('Correct', 'Number guessed.', 'success');
+      setGuess('');
       return;
     }
     const nextAttempt = guessAttempts + 1;
@@ -1666,9 +2037,12 @@ function MinigamePanel({
     if (nextAttempt >= 3) {
       setGuessMessage(`Missed. The number was ${numberTarget}.`);
       markLoser(current.id);
+      showPopup('Incorrect', `The number was ${numberTarget}.`, 'danger');
+      setGuess('');
       return;
     }
     setGuessMessage(`${value < numberTarget ? 'Higher' : 'Lower'}. Guess ${nextAttempt + 1} of 3.`);
+    setGuess('');
   };
 
   return (
@@ -1702,8 +2076,16 @@ function MinigamePanel({
           <span>
             {touches.size} active touch{touches.size === 1 ? '' : 'es'}
           </span>
-          <button className="secondary-button" type="button" onClick={pickRandomLoser}>
-            Fallback picker
+          <button
+            className="secondary-button"
+            type="button"
+            onClick={() => {
+              const picked = randomSource.pick(players);
+              markLoser(picked.id);
+              showPopup('Finger Picker', `${picked.name} was selected.`, 'danger');
+            }}
+          >
+            Reveal Player
           </button>
         </div>
       )}
@@ -1724,10 +2106,16 @@ function MinigamePanel({
           players={players}
           setLoserId={markLoser}
           setWinnerId={setWinnerId}
+          showPopup={showPopup}
         />
       )}
       {id === 'reaction-tap' && (
-        <ReactionTapMini setLoserId={markLoser} setWinnerId={setWinnerId} players={players} />
+        <ReactionTapMini
+          current={current}
+          setLoserId={markLoser}
+          markNoPenalty={markNoPenalty}
+          showPopup={showPopup}
+        />
       )}
       {id === 'colour-rush' && (
         <ColourRushMini current={current} setLoserId={markLoser} markNoPenalty={markNoPenalty} />
@@ -1764,10 +2152,13 @@ function MinigamePanel({
         </div>
       )}
       {id === 'trivia-blitz' && (
-        <details>
-          <summary>{trivia.question}</summary>
-          <p>Answer: {trivia.answer}</p>
-        </details>
+        <TriviaMini
+          current={current}
+          trivia={trivia}
+          setLoserId={markLoser}
+          markNoPenalty={markNoPenalty}
+          showPopup={showPopup}
+        />
       )}
       {id === 'exact-timer' && (
         <TimerMini current={current} setLoserId={markLoser} markNoPenalty={markNoPenalty} />
@@ -1791,7 +2182,7 @@ function MinigamePanel({
       )}
       {id === 'spinner' && <p>Use the spinner controls above.</p>}
 
-      <div className="minigame-outcome">
+      {needsManualOutcome && <div className="minigame-outcome">
         <PlayerSelect
           label="Winner"
           players={players}
@@ -1804,8 +2195,8 @@ function MinigamePanel({
           value={selectedLoser}
           onChange={markLoser}
         />
-      </div>
-      <label className="checkbox-line">
+      </div>}
+      {needsManualOutcome && <label className="checkbox-line">
         <input
           type="checkbox"
           checked={noPenalty}
@@ -1817,7 +2208,7 @@ function MinigamePanel({
           }}
         />
         <span>No penalty for this mini-game</span>
-      </label>
+      </label>}
     </section>
   );
 }
@@ -1827,17 +2218,24 @@ function DiceDuelMini({
   players,
   setLoserId,
   setWinnerId,
+  showPopup,
 }: {
   current: Player;
   players: Player[];
   setLoserId: (id: string | undefined) => void;
   setWinnerId: (id: string | undefined) => void;
+  showPopup: (title: string, message: string, tone?: PopupTone) => void;
 }) {
   const opponents = players.filter((player) => player.id !== current.id);
   const [opponentId, setOpponentId] = useState(opponents[0]?.id ?? current.id);
   const [result, setResult] = useState('Choose an opponent, then roll both dice.');
+  const [rolling, setRolling] = useState(false);
+  const [rolls, setRolls] = useState<[number, number]>([1, 1]);
 
   const rollDuel = () => {
+    if (rolling) {
+      return;
+    }
     const opponent = players.find((player) => player.id === opponentId) ?? opponents[0];
     if (!opponent) {
       setResult('No opponent is available.');
@@ -1845,19 +2243,23 @@ function DiceDuelMini({
     }
     const currentRoll = randomSource.integer(1, 6);
     const opponentRoll = randomSource.integer(1, 6);
-    if (currentRoll === opponentRoll) {
-      setResult(
-        `${current.name} ${currentRoll} · ${opponent.name} ${opponentRoll}. Tie, roll again.`,
-      );
-      return;
-    }
-    const loser = currentRoll < opponentRoll ? current : opponent;
-    const winner = currentRoll > opponentRoll ? current : opponent;
-    setLoserId(loser.id);
-    setWinnerId(winner.id);
-    setResult(
-      `${current.name} ${currentRoll} · ${opponent.name} ${opponentRoll}. ${loser.name} loses.`,
-    );
+    setRolling(true);
+    setRolls([currentRoll, opponentRoll]);
+    setResult('Dice are rolling...');
+    window.setTimeout(() => {
+      setRolling(false);
+      if (currentRoll === opponentRoll) {
+        setResult(`${current.name} ${currentRoll} · ${opponent.name} ${opponentRoll}. Tie, roll again.`);
+        showPopup('Dice Duel', 'Tie. Roll again.', 'info');
+        return;
+      }
+      const loser = currentRoll < opponentRoll ? current : opponent;
+      const winner = currentRoll > opponentRoll ? current : opponent;
+      setLoserId(loser.id);
+      setWinnerId(winner.id);
+      setResult(`${current.name} ${currentRoll} · ${opponent.name} ${opponentRoll}. ${loser.name} loses.`);
+      showPopup('Dice Duel', `${winner.name} wins. ${loser.name} takes the sip.`, 'danger');
+    }, 900);
   };
 
   return (
@@ -1868,7 +2270,11 @@ function DiceDuelMini({
         value={opponentId}
         onChange={setOpponentId}
       />
-      <button className="secondary-button" type="button" onClick={rollDuel}>
+      <div className="duel-dice-row">
+        <DiceRollIndicator value={rolls[0]} rolling={rolling} />
+        <DiceRollIndicator value={rolls[1]} rolling={rolling} />
+      </div>
+      <button className="secondary-button" type="button" disabled={rolling} onClick={rollDuel}>
         <Icons.Dices aria-hidden="true" />
         Roll Duel
       </button>
@@ -1878,20 +2284,21 @@ function DiceDuelMini({
 }
 
 function ReactionTapMini({
-  players,
+  current,
   setLoserId,
-  setWinnerId,
+  markNoPenalty,
+  showPopup,
 }: {
-  players: Player[];
+  current: Player;
   setLoserId: (id: string | undefined) => void;
-  setWinnerId: (id: string | undefined) => void;
+  markNoPenalty: (winner?: string | undefined) => void;
+  showPopup: (title: string, message: string, tone?: PopupTone) => void;
 }) {
   const [state, setState] = useState<'idle' | 'waiting' | 'tap' | 'done'>('idle');
   const [message, setMessage] = useState(
-    'Start the round, then tap only when the screen turns yellow.',
+    'Start, wait for yellow, then tap as fast as you can.',
   );
   const [startedAt, setStartedAt] = useState<number | null>(null);
-  const [tapTimes, setTapTimes] = useState<Record<string, number>>({});
   const timeoutRef = useRef<number | null>(null);
 
   useEffect(() => {
@@ -1907,7 +2314,6 @@ function ReactionTapMini({
       window.clearTimeout(timeoutRef.current);
     }
     setState('waiting');
-    setTapTimes({});
     setStartedAt(null);
     setMessage('Wait for yellow...');
     timeoutRef.current = window.setTimeout(
@@ -1920,71 +2326,46 @@ function ReactionTapMini({
     );
   };
 
-  const registerTap = (player: Player) => {
+  const registerTap = () => {
     if (state === 'waiting') {
       if (timeoutRef.current) {
         window.clearTimeout(timeoutRef.current);
       }
       setState('done');
-      setLoserId(player.id);
-      setMessage(`${player.name} tapped early.`);
+      setLoserId(current.id);
+      setMessage(`${current.name} tapped early.`);
+      showPopup('Too Soon', `${current.name} takes the sip.`, 'danger');
       return;
     }
-    if (state !== 'tap' || !startedAt || tapTimes[player.id] !== undefined) {
+    if (state !== 'tap' || !startedAt) {
       return;
     }
 
     const elapsed = performance.now() - startedAt;
-    const nextTimes = { ...tapTimes, [player.id]: elapsed };
-    setTapTimes(nextTimes);
-
-    const entries = Object.entries(nextTimes);
-    if (entries.length >= players.length) {
-      const sorted = entries.sort((a, b) => a[1] - b[1]);
-      const winner = players.find((entry) => entry.id === sorted[0][0]);
-      const loser = players.find((entry) => entry.id === sorted[sorted.length - 1][0]);
-      setWinnerId(winner?.id);
-      setLoserId(loser?.id);
-      setState('done');
-      setMessage(`${winner?.name ?? 'Fastest'} fastest · ${loser?.name ?? 'Slowest'} slowest.`);
+    setState('done');
+    if (elapsed <= 480) {
+      markNoPenalty(current.id);
+      setMessage(`${Math.round(elapsed)}ms. Cleared.`);
+      showPopup('Fast Tap', `${Math.round(elapsed)}ms. Cleared.`, 'success');
       return;
     }
-
-    setMessage(`${player.name} locked in. ${players.length - entries.length} to go.`);
+    setLoserId(current.id);
+    setMessage(`${Math.round(elapsed)}ms. Too slow.`);
+    showPopup('Too Slow', `${current.name} takes the sip.`, 'danger');
   };
 
   return (
-    <div className={`reaction-zone ${state}`}>
+    <button className={`reaction-zone ${state}`} type="button" onClick={registerTap}>
       <strong>{message}</strong>
-      <div className="reaction-player-grid">
-        {players.map((player) => (
-          <button
-            key={player.id}
-            className={
-              tapTimes[player.id] !== undefined ? 'reaction-player tapped' : 'reaction-player'
-            }
-            type="button"
-            style={{ '--counter-colour': player.colour } as CSSProperties}
-            disabled={state === 'idle' || state === 'done'}
-            onClick={() => registerTap(player)}
-          >
-            {player.name}
-          </button>
-        ))}
-      </div>
       <div className="button-row">
-        <button className="secondary-button" type="button" onClick={start}>
+        <span className="secondary-button" role="button" tabIndex={0} onClick={(event) => {
+          event.stopPropagation();
+          start();
+        }}>
           {state === 'idle' ? 'Start' : 'Restart'}
-        </button>
-        <button
-          className="secondary-button"
-          type="button"
-          onClick={() => setLoserId(randomSource.pick(players).id)}
-        >
-          Mark slowest
-        </button>
+        </span>
       </div>
-    </div>
+    </button>
   );
 }
 
@@ -2141,6 +2522,59 @@ function BlackjackMini({
   );
 }
 
+function TriviaMini({
+  current,
+  trivia,
+  setLoserId,
+  markNoPenalty,
+  showPopup,
+}: {
+  current: Player;
+  trivia: { question: string; answer: string; options?: string[] };
+  setLoserId: (id: string | undefined) => void;
+  markNoPenalty: (winner?: string | undefined) => void;
+  showPopup: (title: string, message: string, tone?: PopupTone) => void;
+}) {
+  const [lockedAnswer, setLockedAnswer] = useState<string | null>(null);
+  const options = useMemo(() => {
+    const base = trivia.options?.length ? trivia.options : [trivia.answer, 'Pass', 'No idea', 'Skip'];
+    return randomSource.shuffle(base);
+  }, [trivia]);
+
+  const choose = (answer: string) => {
+    if (lockedAnswer) {
+      return;
+    }
+    setLockedAnswer(answer);
+    if (answer === trivia.answer) {
+      markNoPenalty(current.id);
+      showPopup('Correct', trivia.answer, 'success');
+      return;
+    }
+    setLoserId(current.id);
+    showPopup('Incorrect', `Answer: ${trivia.answer}`, 'danger');
+  };
+
+  return (
+    <div className="mini-card trivia-card">
+      <strong>{trivia.question}</strong>
+      <div className="choice-card-grid">
+        {options.map((option) => (
+          <button
+            key={option}
+            className={`choice-card ${lockedAnswer === option ? 'selected' : ''}`}
+            type="button"
+            disabled={Boolean(lockedAnswer)}
+            onClick={() => choose(option)}
+          >
+            {option}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function WireCutterMini({
   current,
   setLoserId,
@@ -2150,25 +2584,40 @@ function WireCutterMini({
   setLoserId: (id: string | undefined) => void;
   markNoPenalty: (winner?: string | undefined) => void;
 }) {
-  const [correctWire] = useState(() => randomSource.pick(rushColours));
-  const [armed, setArmed] = useState(false);
+  const wires = useMemo(() => randomSource.shuffle([...rushColours]), []);
+  const [correctWire] = useState(() => {
+    const rule = randomSource.integer(0, 2);
+    if (rule === 0) {
+      return wires.find((wire) => wire.id === 'cyan') ?? wires[0];
+    }
+    if (rule === 1) {
+      return wires[wires.length - 1];
+    }
+    return wires.find((wire) => wire.id !== 'yellow') ?? wires[0];
+  });
+  const clue =
+    correctWire.id === 'cyan'
+      ? 'Cut the wire whose colour starts with the third letter of the alphabet.'
+      : wires[wires.length - 1].id === correctWire.id
+        ? 'Cut the wire furthest to the right.'
+        : 'Cut the first wire from the left that is not sunshine-coloured.';
   const [done, setDone] = useState(false);
-  const [message, setMessage] = useState('Start the countdown, then cut the wire from the clue.');
+  const [message, setMessage] = useState('Countdown is live. Use the clue.');
 
   useEffect(() => {
-    if (!armed || done) {
+    if (done) {
       return;
     }
     const timeout = window.setTimeout(() => {
       setDone(true);
       setLoserId(current.id);
       setMessage('Time ran out.');
-    }, 8000);
+    }, 7000);
     return () => window.clearTimeout(timeout);
-  }, [armed, current.id, done, setLoserId]);
+  }, [current.id, done, setLoserId]);
 
   const cut = (wireId: string) => {
-    if (!armed || done) {
+    if (done) {
       return;
     }
     setDone(true);
@@ -2183,14 +2632,14 @@ function WireCutterMini({
 
   return (
     <div className="mini-card wire-card">
-      <strong>Clue: cut the {correctWire.label.toLowerCase()} wire.</strong>
+      <strong>{clue}</strong>
       <div className="wire-grid">
-        {rushColours.map((wire) => (
+        {wires.map((wire) => (
           <button
             key={wire.id}
             className="wire-button"
             type="button"
-            disabled={!armed || done}
+            disabled={done}
             style={{ '--choice-colour': wire.value } as CSSProperties}
             onClick={() => cut(wire.id)}
           >
@@ -2198,21 +2647,7 @@ function WireCutterMini({
           </button>
         ))}
       </div>
-      <div className="button-row">
-        <button
-          className="secondary-button"
-          type="button"
-          disabled={armed && !done}
-          onClick={() => {
-            setArmed(true);
-            setDone(false);
-            setMessage('Countdown running.');
-          }}
-        >
-          Start Countdown
-        </button>
-        <span>{message}</span>
-      </div>
+      <span>{message}</span>
     </div>
   );
 }
@@ -2294,7 +2729,7 @@ function BombDefuseMini({
   const [done, setDone] = useState(false);
   const [step, setStep] = useState(0);
   const [codeGuess, setCodeGuess] = useState('');
-  const [timeLeft, setTimeLeft] = useState(14);
+  const [timeLeft, setTimeLeft] = useState(9);
   const [message, setMessage] = useState('Start the bomb, then clear all three tasks.');
 
   useEffect(() => {
@@ -2303,13 +2738,13 @@ function BombDefuseMini({
     }
     const startedAt = performance.now();
     const interval = window.setInterval(() => {
-      setTimeLeft(Math.max(0, 14 - Math.floor((performance.now() - startedAt) / 1000)));
+      setTimeLeft(Math.max(0, 9 - Math.floor((performance.now() - startedAt) / 1000)));
     }, 250);
     const timeout = window.setTimeout(() => {
       setDone(true);
       setLoserId(current.id);
       setMessage('Bomb timer expired.');
-    }, 14000);
+    }, 9000);
     return () => {
       window.clearInterval(interval);
       window.clearTimeout(timeout);
@@ -2525,12 +2960,17 @@ function HoldButtonMini({
   const [startedAt, setStartedAt] = useState<number | null>(null);
   const [label, setLabel] = useState('Hold, then release near 3 seconds.');
   const targetSeconds = 3;
-  const tolerance = 0.35;
+  const tolerance = 0.5;
+  const [locked, setLocked] = useState(false);
   return (
     <button
       className={`hold-button ${holding ? 'holding' : ''}`}
       type="button"
+      disabled={locked}
       onPointerDown={() => {
+        if (locked) {
+          return;
+        }
         setHolding(true);
         setStartedAt(performance.now());
         setLabel('Holding...');
@@ -2539,6 +2979,7 @@ function HoldButtonMini({
         const elapsed = startedAt ? (performance.now() - startedAt) / 1000 : 0;
         const difference = Math.abs(elapsed - targetSeconds);
         setHolding(false);
+        setLocked(true);
         if (difference <= tolerance) {
           markNoPenalty(current.id);
           setLabel(`${elapsed.toFixed(2)} seconds. Cleared.`);
@@ -2634,6 +3075,41 @@ function PauseMenu({
         </button>
       </div>
       <Scoreboard game={game} settings={settings} />
+      <section className="manual-adjustments" aria-label="Manual score adjustments">
+        <h3>Manual Adjust</h3>
+        {game.players.map((player) => (
+          <div className="manual-adjustment-row" key={player.id}>
+            <strong>{player.name}</strong>
+            <button
+              className="secondary-button"
+              type="button"
+              onClick={() =>
+                setGame((state) => (state ? applyManualAdjustment(state, player.id, 1, 0) : state))
+              }
+            >
+              +1 Sip
+            </button>
+            <button
+              className="secondary-button"
+              type="button"
+              onClick={() =>
+                setGame((state) => (state ? applyManualAdjustment(state, player.id, 2, 0) : state))
+              }
+            >
+              +2 Sips
+            </button>
+            <button
+              className="secondary-button"
+              type="button"
+              onClick={() =>
+                setGame((state) => (state ? applyManualAdjustment(state, player.id, 0, 1) : state))
+              }
+            >
+              +Shot
+            </button>
+          </div>
+        ))}
+      </section>
       {showHistory && (
         <ol className="history-list">
           {game.history
