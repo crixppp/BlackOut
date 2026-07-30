@@ -1087,6 +1087,9 @@ export const tileActionHandlers: Record<BoardTile['actionType'], TileActionHandl
       state,
       `Card drawn: ${drawn.rank} of ${drawn.suit}. ${correct ? 'Correct guess.' : 'Incorrect guess.'}`,
     );
+    if (correct && choice.cardGuessNoReward) {
+      return addHistory(withDraw, 'No other active player was available for the card reward.');
+    }
     return correct
       ? resolveAssignments(
           withDraw,
@@ -1104,6 +1107,26 @@ export const tileActionHandlers: Record<BoardTile['actionType'], TileActionHandl
         );
   },
   'high-roller': (state, tile, settings, random, choice) => {
+    if (tile.actionConfig?.doubleOrNothing === true || tile.id === 23) {
+      const total = choice.highRollValue ?? random.integer(2, 12);
+      const withRoll = addHistory(state, `Double or Nothing rolled ${total}.`);
+      return total >= 7
+        ? resolveAssignments(
+            withRoll,
+            [{ target: 'chosen', drinks: 2 }],
+            settings,
+            random,
+            choice,
+          )
+        : resolveAssignments(
+            withRoll,
+            [{ target: 'current', drinks: 2 }],
+            settings,
+            random,
+            choice,
+          );
+    }
+
     const roll = choice.highRollValue ?? random.integer(1, 6);
     const lateGame = tile.actionConfig?.lateGame === true;
     const withRoll = addHistory(state, `Bonus die rolled ${roll}.`);
@@ -1200,6 +1223,14 @@ function resolveSpinnerResult(
         random,
         choice,
       );
+    case 'three-drinks':
+      return resolveAssignments(
+        withHistory,
+        [{ target: 'current', drinks: 3 }],
+        settings,
+        random,
+        choice,
+      );
     case 'one-shot':
       return resolveAssignments(
         withHistory,
@@ -1216,6 +1247,14 @@ function resolveSpinnerResult(
         random,
         choice,
       );
+    case 'three-shots':
+      return resolveAssignments(
+        withHistory,
+        [{ target: 'current', shots: 3 }],
+        settings,
+        random,
+        choice,
+      );
     case 'chug':
       return resolveAssignments(
         withHistory,
@@ -1228,12 +1267,55 @@ function resolveSpinnerResult(
       const current = getCurrentPlayer(withHistory);
       return applyMovementOffset(withHistory, -current.position, settings);
     }
+    case 'move-one':
+      return applyMovementOffset(withHistory, 1, settings);
+    case 'move-two':
+      return applyMovementOffset(withHistory, 2, settings);
+    case 'move-three':
+      return applyMovementOffset(withHistory, 3, settings);
+    case 'move-four':
+      return applyMovementOffset(withHistory, 4, settings);
+    case 'move-five':
+      return applyMovementOffset(withHistory, 5, settings);
+    case 'back-one':
+      return applyMovementOffset(withHistory, -1, settings);
     case 'back-two':
       return applyMovementOffset(withHistory, -2, settings);
+    case 'back-three':
+      return applyMovementOffset(withHistory, -3, settings);
+    case 'back-four':
+      return applyMovementOffset(withHistory, -4, settings);
+    case 'back-five':
+      return applyMovementOffset(withHistory, -5, settings);
     case 'choose-player':
+    case 'give-two-drinks':
       return resolveAssignments(
         withHistory,
         [{ target: 'chosen', drinks: 2 }],
+        settings,
+        random,
+        choice,
+      );
+    case 'give-drink':
+      return resolveAssignments(
+        withHistory,
+        [{ target: 'chosen', drinks: 1 }],
+        settings,
+        random,
+        choice,
+      );
+    case 'give-shot':
+      return resolveAssignments(
+        withHistory,
+        [{ target: 'chosen', shots: 1 }],
+        settings,
+        random,
+        choice,
+      );
+    case 'give-two-shots':
+      return resolveAssignments(
+        withHistory,
+        [{ target: 'chosen', shots: 2 }],
         settings,
         random,
         choice,

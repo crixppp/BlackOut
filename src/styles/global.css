@@ -1058,7 +1058,7 @@ select {
   display: grid;
   gap: 0;
   transform: translateY(calc((1 - var(--settled-index, 1)) * 62px));
-  transition: transform 1180ms cubic-bezier(0.12, 0.82, 0.2, 1);
+  transition: transform var(--spin-duration, 2800ms) cubic-bezier(0.07, 0.84, 0.16, 1);
 }
 
 .slot-prize {
@@ -1227,6 +1227,19 @@ select {
     #111111;
 }
 
+.playing-card.mini {
+  width: 72px;
+  min-width: 72px;
+  padding: 0.42rem;
+  border-width: 3px;
+  border-radius: 7px;
+  box-shadow: 0 5px 0 var(--colour-yellow);
+}
+
+.playing-card.mini strong {
+  font-size: 2.2rem;
+}
+
 .suit-hearts,
 .suit-diamonds,
 .suit-red {
@@ -1313,7 +1326,8 @@ select {
   text-transform: uppercase;
 }
 
-.blackjack-hands,
+.blackjack-table,
+.blackjack-hand,
 .bomb-status,
 .bomb-task {
   display: grid;
@@ -1324,62 +1338,23 @@ select {
   background: rgba(0, 0, 0, 0.28);
 }
 
-.blackjack-hands strong,
+.blackjack-table {
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.blackjack-hand {
+  align-content: start;
+}
+
+.blackjack-card-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.blackjack-hand strong,
 .bomb-status strong {
   color: var(--colour-yellow);
-}
-
-.lock-card {
-  justify-items: center;
-}
-
-.lock-face {
-  position: relative;
-  width: 154px;
-  height: 154px;
-  border: 6px solid #000000;
-  border-radius: 50%;
-  background: conic-gradient(
-    var(--colour-yellow) 0 38deg,
-    #202020 38deg 320deg,
-    var(--colour-yellow) 320deg 360deg
-  );
-  box-shadow: inset 0 0 0 16px rgba(255, 255, 255, 0.08);
-}
-
-.lock-face::after {
-  content: '';
-  position: absolute;
-  inset: 42px;
-  border: 4px solid #000000;
-  border-radius: 50%;
-  background: #ffffff;
-}
-
-.lock-marker {
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  z-index: 1;
-  width: 6px;
-  height: 66px;
-  border-radius: 999px;
-  background: #ff7b7f;
-  transform: translateX(-50%) rotate(0deg);
-  transform-origin: 50% 0;
-}
-
-.lock-face.running .lock-marker {
-  animation: lockSpin 1500ms linear infinite;
-}
-
-.lock-success-zone {
-  position: absolute;
-  inset: -6px;
-  border: 6px solid var(--colour-yellow);
-  border-radius: 50%;
-  clip-path: polygon(50% 50%, 100% 0, 100% 100%);
-  opacity: 0.48;
 }
 
 .touch-pad,
@@ -1602,15 +1577,6 @@ select {
   }
   to {
     transform: rotate(-8deg) translateY(0) scale(1);
-  }
-}
-
-@keyframes lockSpin {
-  from {
-    transform: translateX(-50%) rotate(0deg);
-  }
-  to {
-    transform: translateX(-50%) rotate(360deg);
   }
 }
 

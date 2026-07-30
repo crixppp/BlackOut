@@ -216,7 +216,6 @@ export type MinigameId =
   | 'colour-rush'
   | 'blackjack'
   | 'wire-cutter'
-  | 'lock-picker'
   | 'bomb-defuse'
   | 'number-guess'
   | 'trivia-blitz'
@@ -243,17 +242,33 @@ export interface TileChoice {
   randomPlayerId?: string;
   cardGuess?: 'red' | 'black' | 'spades' | 'hearts' | 'clubs' | 'diamonds';
   cardDraw?: PlayingCard;
+  cardGuessNoReward?: boolean;
 }
 
 export type SpinnerSegmentId =
   | 'one-drink'
   | 'two-drinks'
+  | 'three-drinks'
   | 'one-shot'
   | 'two-shots'
+  | 'three-shots'
   | 'chug'
   | 'go-start'
+  | 'move-one'
+  | 'move-two'
+  | 'move-three'
+  | 'move-four'
+  | 'move-five'
+  | 'back-one'
   | 'back-two'
+  | 'back-three'
+  | 'back-four'
+  | 'back-five'
   | 'choose-player'
+  | 'give-drink'
+  | 'give-two-drinks'
+  | 'give-shot'
+  | 'give-two-shots'
   | 'all-players'
   | 'everyone-shot'
   | 'shield';

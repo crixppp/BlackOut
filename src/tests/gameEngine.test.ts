@@ -172,6 +172,29 @@ describe('game engine', () => {
     expect(getCurrentPlayer(resolved).drinks).toBe(2);
   });
 
+  it('activates the tile landed on after backtrack movement', () => {
+    const base = makeGame();
+    const game = {
+      ...base,
+      turnPhase: 'resolving-tile' as const,
+      currentTileResolution: {
+        tileId: 27,
+        tileTitle: 'Backtrack Beat',
+        startedAtTurn: base.turnNumber,
+        actionType: 'movement' as const,
+      },
+      resolvedTileIdsThisTurn: [27],
+      players: base.players.map((player, index) =>
+        index === 0 ? { ...player, position: 27 } : player,
+      ),
+    };
+    const resolved = resolveCurrentTile(game, makeSettings(), new FixedRandomSource([1]));
+
+    expect(getCurrentPlayer(resolved).position).toBe(25);
+    expect(resolved.turnPhase).toBe('resolving-tile');
+    expect(resolved.currentTileResolution?.tileId).toBe(25);
+  });
+
   it('assigns pair choices once to the primary and secondary players', () => {
     const base = makeGame(3);
     const game = {

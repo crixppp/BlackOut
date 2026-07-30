@@ -78,6 +78,7 @@ import {
 } from 'lucide-react';
 import {
   BOARD_TILES,
+  DANGER_SPINNER_SEGMENTS,
   DEATH_WHEEL_SEGMENTS,
   JACKPOT_SPINNER_SEGMENTS,
   SPINNER_SEGMENTS,
@@ -246,6 +247,8 @@ interface GamePopup {
 }
 
 const POPUP_DURATION_MS = 5000;
+const TILE_LANDING_DELAY_MS = 1000;
+const SPINNER_SPIN_MS = 2800;
 
 function Icon({ name, label }: { name: string; label?: string }) {
   const LucideIcon = ICONS[name] ?? ICONS.Circle;
@@ -1502,8 +1505,10 @@ function TileActionModal({
   const [minigameNoPenalty, setMinigameNoPenalty] = useState(false);
   const [previewVisible, setPreviewVisible] = useState(true);
   const [challengeStarted, setChallengeStarted] = useState(false);
+  const [landingDelayDone, setLandingDelayDone] = useState(false);
   const [cardDraw, setCardDraw] = useState<PlayingCard | null>(null);
   const [cardGuess, setCardGuess] = useState<TileChoice['cardGuess']>();
+  const [cardGuessCorrect, setCardGuessCorrect] = useState<boolean | undefined>();
   const actionSubmittedRef = useRef(false);
   const targetIncludesCurrent =
     !tile || (tile.actionType !== 'choice' && tile.actionType !== 'buddy')
@@ -1524,21 +1529,30 @@ function TileActionModal({
   useEffect(() => {
     setChallengeStarted(false);
     setPreviewVisible(true);
+    setLandingDelayDone(false);
     setSpinnerResult(undefined);
     setMinigameLoserId(undefined);
     setMinigameWinnerId(undefined);
     setMinigameNoPenalty(false);
     setCardDraw(null);
     setCardGuess(undefined);
+    setCardGuessCorrect(undefined);
     actionSubmittedRef.current = false;
-    const timeout = window.setTimeout(
+    const landingTimeout = window.setTimeout(
+      () => setLandingDelayDone(true),
+      settings.reducedMotion ? 100 : TILE_LANDING_DELAY_MS,
+    );
+    const revealTimeout = window.setTimeout(
       () => {
         setPreviewVisible(false);
         setChallengeStarted(true);
       },
-      settings.reducedMotion ? 300 : POPUP_DURATION_MS,
+      settings.reducedMotion ? 400 : TILE_LANDING_DELAY_MS + POPUP_DURATION_MS,
     );
-    return () => window.clearTimeout(timeout);
+    return () => {
+      window.clearTimeout(landingTimeout);
+      window.clearTimeout(revealTimeout);
+    };
   }, [resolution?.startedAtTurn, resolution?.tileId, settings.reducedMotion]);
 
   const display = tile
@@ -1641,6 +1655,10 @@ function TileActionModal({
     return null;
   }
 
+  if (!landingDelayDone) {
+    return null;
+  }
+
   if (previewVisible || !challengeStarted) {
     return (
       <Modal
@@ -1706,7 +1724,7 @@ function TileActionModal({
           result={spinnerResult}
           onSpin={(result) => {
             setSpinnerResult(result);
-            const needsTarget = result === 'choose-player';
+            const needsTarget = spinnerSegmentNeedsTarget(result);
             const pickedLabel = spinnerSegmentLabel(tile, result);
             window.setTimeout(() => {
               if (!needsTarget) {
@@ -1721,20 +1739,26 @@ function TileActionModal({
                   40,
                 );
               }
-            }, 1050);
+            }, SPINNER_SPIN_MS + 150);
           }}
         />
       )}
 
-      {isSpinner && spinnerResult === 'choose-player' && (
+      {isSpinner && spinnerResult && spinnerSegmentNeedsTarget(spinnerResult) && (
         <SpinnerTargetPanel
+          segmentId={spinnerResult}
           players={getEligibleTargets(game, false)}
           targetId={targetId}
           setTargetId={setTargetId}
           onApply={(selectedId, playerName) => {
             submitResult({ spinnerResult, targetPlayerId: selectedId });
             window.setTimeout(
-              () => showPopup('Spinner', `${playerName} receives 2 sips.`, 'danger'),
+              () =>
+                showPopup(
+                  'Spinner',
+                  spinnerTargetResultText(spinnerResult, playerName),
+                  spinnerResult.includes('shot') ? 'danger' : 'prize',
+                ),
               40,
             );
           }}
@@ -1761,14 +1785,39 @@ function TileActionModal({
           setCardGuess={setCardGuess}
           showPopup={showPopup}
           onDone={(guess, drawn, correct) => {
+            setCardGuessCorrect(correct);
+            if (correct) {
+              const rewardTargets = getEligibleTargets(game, false);
+              if (rewardTargets.length === 0) {
+                submitResult({ cardGuess: guess, cardDraw: drawn, cardGuessNoReward: true });
+                window.setTimeout(
+                  () => showPopup('Correct', 'No other active player. Challenge cleared.', 'success'),
+                  40,
+                );
+              } else {
+                showPopup('Correct', 'Choose another player to receive 1 sip.', 'success');
+              }
+              return;
+            }
             submitResult({ cardGuess: guess, cardDraw: drawn });
             window.setTimeout(
               () =>
-                showPopup(
-                  correct ? 'Correct' : 'Incorrect',
-                  `${drawn.rank} of ${drawn.suit}`,
-                  correct ? 'success' : 'danger',
-                ),
+                showPopup('Incorrect', `${current.name} receives 1 sip. Card: ${drawn.rank} of ${drawn.suit}.`, 'danger'),
+              40,
+            );
+          }}
+        />
+      )}
+
+      {needsCardGuess && cardGuessCorrect === true && cardDraw && (
+        <CardRewardTargetPanel
+          players={getEligibleTargets(game, false)}
+          targetId={targetId}
+          setTargetId={setTargetId}
+          onApply={(selectedId, playerName) => {
+            submitResult({ cardGuess: cardGuess ?? 'red', cardDraw, targetPlayerId: selectedId });
+            window.setTimeout(
+              () => showPopup('Card Guess', `${playerName} receives 1 sip.`, 'danger'),
               40,
             );
           }}
@@ -1871,14 +1920,19 @@ function SpinnerPanel({
     onSpin(picked);
     window.setTimeout(() => {
       setSpinning(false);
-    }, 1180);
+    }, SPINNER_SPIN_MS);
   };
   return (
     <div className="spinner-panel">
       <div className="slot-spinner" aria-label="Prize spinner">
         <div
           className={`slot-reel ${spinning ? 'spinning' : ''}`}
-          style={{ '--settled-index': settledIndex } as CSSProperties}
+          style={
+            {
+              '--settled-index': settledIndex,
+              '--spin-duration': `${SPINNER_SPIN_MS}ms`,
+            } as CSSProperties
+          }
         >
           {reelItems.map((segment, index) => (
             <span
@@ -1925,11 +1979,13 @@ function OutcomeChoicePanel({
 }
 
 function SpinnerTargetPanel({
+  segmentId,
   players,
   targetId,
   setTargetId,
   onApply,
 }: {
+  segmentId: SpinnerSegmentId;
   players: Player[];
   targetId: string;
   setTargetId: (id: string) => void;
@@ -1949,7 +2005,7 @@ function SpinnerTargetPanel({
   const selectedPlayer = players.find((player) => player.id === value) ?? players[0];
   return (
     <div className="mini-card">
-      <PlayerSelect label="Choose who gets 2 sips" players={players} value={value} onChange={setTargetId} />
+      <PlayerSelect label={spinnerTargetPrompt(segmentId)} players={players} value={value} onChange={setTargetId} />
       <button className="primary-button" type="button" onClick={() => onApply(value, selectedPlayer.name)}>
         <Icons.Check aria-hidden="true" />
         Apply
@@ -1958,9 +2014,66 @@ function SpinnerTargetPanel({
   );
 }
 
+function CardRewardTargetPanel({
+  players,
+  targetId,
+  setTargetId,
+  onApply,
+}: {
+  players: Player[];
+  targetId: string;
+  setTargetId: (id: string) => void;
+  onApply: (targetId: string, playerName: string) => void;
+}) {
+  if (players.length === 0) {
+    return null;
+  }
+  const value = players.some((player) => player.id === targetId) ? targetId : players[0].id;
+  const selectedPlayer = players.find((player) => player.id === value) ?? players[0];
+  return (
+    <div className="mini-card">
+      <PlayerSelect label="Choose who receives 1 sip" players={players} value={value} onChange={setTargetId} />
+      <button className="primary-button" type="button" onClick={() => onApply(value, selectedPlayer.name)}>
+        <Icons.Check aria-hidden="true" />
+        Assign Sip
+      </button>
+    </div>
+  );
+}
+
 function spinnerSegmentLabel(tile: BoardTile, segmentId: SpinnerSegmentId): string {
   const segments = spinnerSegmentsForTile(tile);
   return segments.find((segment) => segment.id === segmentId)?.label ?? 'Result';
+}
+
+function spinnerSegmentNeedsTarget(segmentId: SpinnerSegmentId): boolean {
+  return ['choose-player', 'give-drink', 'give-two-drinks', 'give-shot', 'give-two-shots'].includes(segmentId);
+}
+
+function spinnerTargetPrompt(segmentId: SpinnerSegmentId): string {
+  if (segmentId === 'give-shot') {
+    return 'Choose who receives 1 shot';
+  }
+  if (segmentId === 'give-two-shots') {
+    return 'Choose who receives 2 shots';
+  }
+  if (segmentId === 'give-drink') {
+    return 'Choose who receives 1 sip';
+  }
+  return 'Choose who receives 2 sips';
+}
+
+function spinnerTargetResultText(segmentId: SpinnerSegmentId, playerName: string): string {
+  if (segmentId === 'give-shot') {
+    return `${playerName} receives 1 shot.`;
+  }
+  if (segmentId === 'give-two-shots') {
+    return `${playerName} receives 2 shots.`;
+  }
+  if (segmentId === 'give-drink') {
+    return `${playerName} receives 1 sip.`;
+  }
+  return `${playerName} receives 2 sips.`;
 }
 
 const CARD_SUITS = ['spades', 'hearts', 'clubs', 'diamonds'] as const;
@@ -2058,12 +2171,13 @@ function RiskRollPanel({
 }) {
   const isDouble = tile.id === 23;
   const [rolling, setRolling] = useState(false);
+  const [locked, setLocked] = useState(false);
   const [values, setValues] = useState<[number, number]>([1, 1]);
   const otherTargets = targets.filter((player) => player.id !== current.id);
   const [targetId, setTargetId] = useState(otherTargets[0]?.id ?? current.id);
 
   const roll = () => {
-    if (rolling) {
+    if (rolling || locked) {
       return;
     }
     setRolling(true);
@@ -2073,14 +2187,17 @@ function RiskRollPanel({
     const total = first + second;
     setValues([first, displaySecond]);
     window.setTimeout(() => {
+      setLocked(true);
       if (isDouble) {
         const success = total >= 7;
-        onDone({ randomOutcomeIndex: success ? 1 : 0, targetPlayerId: targetId });
+        onDone({ highRollValue: total, targetPlayerId: targetId });
         window.setTimeout(
           () =>
             showPopup(
-              success ? 'Sent Away' : 'Kept It',
-              `${current.name} rolled ${total}.`,
+              'Double or Nothing',
+              success
+                ? `${current.name} rolled ${total}. ${targets.find((player) => player.id === targetId)?.name ?? 'Chosen player'} receives 2 sips.`
+                : `${current.name} rolled ${total}. ${current.name} receives 2 sips.`,
               success ? 'success' : 'danger',
             ),
           40,
@@ -2092,7 +2209,7 @@ function RiskRollPanel({
         () =>
           showPopup(
             'Risk Roll',
-            `${current.name} rolled ${first}: ${riskRollOutcomeText(first, targetId, targets)}.`,
+            `${current.name} rolled ${first}: ${riskRollOutcomeText(first, current, targetId, targets)}.`,
             first <= 2 ? 'danger' : 'prize',
           ),
         40,
@@ -2128,7 +2245,7 @@ function RiskRollPanel({
           onChange={setTargetId}
         />
       )}
-      <button className="secondary-button" type="button" disabled={rolling} onClick={roll}>
+      <button className="secondary-button" type="button" disabled={rolling || locked} onClick={roll}>
         <Icons.Dices aria-hidden="true" />
         Roll
       </button>
@@ -2136,15 +2253,15 @@ function RiskRollPanel({
   );
 }
 
-function riskRollOutcomeText(roll: number, targetId: string | undefined, players: Player[]): string {
+function riskRollOutcomeText(roll: number, current: Player, targetId: string | undefined, players: Player[]): string {
   const target = players.find((player) => player.id === targetId);
   if (roll <= 2) {
-    return 'current player receives 1 shot';
+    return `${current.name} receives 1 shot`;
   }
   if (roll >= 5) {
     return `${target?.name ?? 'chosen player'} receives 1 shot`;
   }
-  return 'current player receives 1 sip';
+  return `${current.name} receives 1 sip`;
 }
 
 function tileOutcomes(tile: BoardTile): Array<{ label: string; hasRandomTarget: boolean }> {
@@ -2191,6 +2308,9 @@ function spinnerSegmentsForTile(tile: BoardTile): SpinnerSegment[] {
   if (tile.actionConfig?.compact === true) {
     return JACKPOT_SPINNER_SEGMENTS;
   }
+  if (tile.actionConfig?.dangerSpinner === true) {
+    return DANGER_SPINNER_SEGMENTS;
+  }
   return SPINNER_SEGMENTS;
 }
 
@@ -2208,7 +2328,7 @@ function buildSpinReel(
   const previous = segments[(resultIndex - 1 + segments.length) % segments.length] ?? result;
   const next = segments[(resultIndex + 1) % segments.length] ?? result;
   const weightedPool = segments.flatMap((segment) => Array.from({ length: segment.weight }, () => segment));
-  const leadIn = Array.from({ length: 18 }, () => randomSource.pick(weightedPool));
+  const leadIn = Array.from({ length: 34 }, () => randomSource.pick(weightedPool));
   return [...leadIn, previous, result, next];
 }
 
@@ -2391,10 +2511,20 @@ function MinigamePanel({
         />
       )}
       {id === 'colour-rush' && (
-        <ColourRushMini current={current} setLoserId={markLoser} markNoPenalty={markNoPenalty} />
+        <ColourRushMini
+          current={current}
+          setLoserId={markLoser}
+          markNoPenalty={markNoPenalty}
+          showPopup={showPopup}
+        />
       )}
       {id === 'blackjack' && (
-        <BlackjackMini current={current} setLoserId={markLoser} markNoPenalty={markNoPenalty} />
+        <BlackjackMini
+          current={current}
+          setLoserId={markLoser}
+          markNoPenalty={markNoPenalty}
+          showPopup={showPopup}
+        />
       )}
       {id === 'wire-cutter' && (
         <WireCutterMini
@@ -2403,9 +2533,6 @@ function MinigamePanel({
           markNoPenalty={markNoPenalty}
           showPopup={showPopup}
         />
-      )}
-      {id === 'lock-picker' && (
-        <LockPickerMini current={current} setLoserId={markLoser} markNoPenalty={markNoPenalty} />
       )}
       {id === 'bomb-defuse' && (
         <BombDefuseMini
@@ -2721,10 +2848,12 @@ function ColourRushMini({
   current,
   setLoserId,
   markNoPenalty,
+  showPopup,
 }: {
   current: Player;
   setLoserId: (id: string | undefined) => void;
   markNoPenalty: (winner?: string | undefined) => void;
+  showPopup: (title: string, message: string, tone?: PopupTone) => void;
 }) {
   const [word] = useState(() => randomSource.pick(rushColours));
   const [ink] = useState(() => {
@@ -2741,11 +2870,13 @@ function ColourRushMini({
     setLocked(true);
     if (colourId === ink.id) {
       markNoPenalty(current.id);
-      setMessage('Correct. Penalty cleared.');
+      setMessage('Correct. No sip assigned.');
+      showPopup('Correct', `${current.name} avoids the sip.`, 'success');
       return;
     }
     setLoserId(current.id);
-    setMessage(`${current.name} picked the word instead of the colour.`);
+    setMessage(`${current.name} picked the wrong colour and receives 1 sip.`);
+    showPopup('Incorrect', `${current.name} receives 1 sip.`, 'danger');
   };
 
   return (
@@ -2770,14 +2901,25 @@ function ColourRushMini({
   );
 }
 
-function drawBlackjackCard(): number {
-  const raw = randomSource.integer(1, 13);
-  return raw > 10 ? 10 : raw;
+function createBlackjackDeck(): PlayingCard[] {
+  return randomSource.shuffle(
+    CARD_SUITS.flatMap((suit) => CARD_RANKS.map((rank) => ({ rank, suit }))),
+  );
 }
 
-function blackjackTotal(cards: number[]): number {
-  let total = cards.reduce((sum, card) => sum + (card === 1 ? 11 : card), 0);
-  let aces = cards.filter((card) => card === 1).length;
+function blackjackCardValue(card: PlayingCard): number {
+  if (card.rank === 'A') {
+    return 11;
+  }
+  if (['J', 'Q', 'K'].includes(card.rank)) {
+    return 10;
+  }
+  return Number(card.rank);
+}
+
+function blackjackTotal(cards: PlayingCard[]): number {
+  let total = cards.reduce((sum, card) => sum + blackjackCardValue(card), 0);
+  let aces = cards.filter((card) => card.rank === 'A').length;
   while (total > 21 && aces > 0) {
     total -= 10;
     aces -= 1;
@@ -2785,70 +2927,163 @@ function blackjackTotal(cards: number[]): number {
   return total;
 }
 
+function createBlackjackHand() {
+  const deck = createBlackjackDeck();
+  return {
+    deck: deck.slice(4),
+    playerCards: [deck[0] ?? drawUiCard(), deck[2] ?? drawUiCard()],
+    dealerCards: [deck[1] ?? drawUiCard(), deck[3] ?? drawUiCard()],
+    dealerRevealed: false,
+    locked: false,
+    message: 'Hit or stand. Beat the dealer without busting.',
+  };
+}
+
+function drawFromDeck(deck: PlayingCard[]): [PlayingCard, PlayingCard[]] {
+  const source = deck.length > 0 ? deck : createBlackjackDeck();
+  const [card, ...remaining] = source;
+  if (!card) {
+    return [drawUiCard(), []];
+  }
+  return [card, remaining];
+}
+
+function PlayingCardView({ card, hidden = false }: { card?: PlayingCard; hidden?: boolean }) {
+  if (hidden || !card) {
+    return (
+      <div className="playing-card mini back">
+        <strong>?</strong>
+      </div>
+    );
+  }
+  return (
+    <div className={`playing-card mini ${cardColour(card.suit)}`}>
+      <span>{card.rank}</span>
+      <strong>{cardSuitSymbol(card.suit)}</strong>
+      <span>{card.rank}</span>
+    </div>
+  );
+}
+
 function BlackjackMini({
   current,
   setLoserId,
   markNoPenalty,
+  showPopup,
 }: {
   current: Player;
   setLoserId: (id: string | undefined) => void;
   markNoPenalty: (winner?: string | undefined) => void;
+  showPopup: (title: string, message: string, tone?: PopupTone) => void;
 }) {
-  const [playerCards, setPlayerCards] = useState(() => [drawBlackjackCard(), drawBlackjackCard()]);
-  const [dealerCards, setDealerCards] = useState(() => [drawBlackjackCard(), drawBlackjackCard()]);
-  const [message, setMessage] = useState('Hit or stand. Beat the dealer without busting.');
-  const [locked, setLocked] = useState(false);
+  const [hand, setHand] = useState(createBlackjackHand);
+  const { deck, playerCards, dealerCards, dealerRevealed, locked, message } = hand;
   const playerTotal = blackjackTotal(playerCards);
-  const dealerTotal = blackjackTotal(dealerCards);
+  const visibleDealerCards = dealerRevealed ? dealerCards : dealerCards.slice(0, 1);
+  const dealerTotal = blackjackTotal(visibleDealerCards);
 
-  const lose = (text: string) => {
-    setLocked(true);
-    setLoserId(current.id);
-    setMessage(text);
+  const finish = (
+    nextHand: typeof hand,
+    text: string,
+    result: 'win' | 'lose' | 'push',
+  ) => {
+    setHand({ ...nextHand, locked: true, dealerRevealed: true, message: text });
+    if (result === 'lose') {
+      setLoserId(current.id);
+      showPopup('Blackjack', `${text} ${current.name} receives 1 sip.`, 'danger');
+      return;
+    }
+    markNoPenalty(current.id);
+    showPopup('Blackjack', `${text} No sip assigned.`, result === 'win' ? 'success' : 'info');
   };
 
-  const win = (text: string) => {
-    setLocked(true);
-    markNoPenalty(current.id);
-    setMessage(text);
+  const lose = (nextHand: typeof hand, text: string) => {
+    finish(nextHand, text, 'lose');
+  };
+
+  const win = (nextHand: typeof hand, text: string) => {
+    finish(nextHand, text, 'win');
+  };
+
+  const push = (nextHand: typeof hand, text: string) => {
+    finish(nextHand, text, 'push');
   };
 
   const hit = () => {
-    const nextCards = [...playerCards, drawBlackjackCard()];
-    setPlayerCards(nextCards);
-    const nextTotal = blackjackTotal(nextCards);
-    if (nextTotal > 21) {
-      lose(`${current.name} busted at ${nextTotal}.`);
+    if (locked) {
+      return;
     }
+    const [card, remaining] = drawFromDeck(deck);
+    const nextHand = {
+      ...hand,
+      deck: remaining,
+      playerCards: [...playerCards, card],
+      message: `${current.name} drew ${card.rank} of ${card.suit}.`,
+    };
+    const nextTotal = blackjackTotal(nextHand.playerCards);
+    if (nextTotal > 21) {
+      lose(nextHand, `${current.name} busts at ${nextTotal}.`);
+      return;
+    }
+    setHand(nextHand);
   };
 
   const stand = () => {
+    if (locked) {
+      return;
+    }
+    let nextDeck = deck;
     const nextDealerCards = [...dealerCards];
     while (blackjackTotal(nextDealerCards) < 17) {
-      nextDealerCards.push(drawBlackjackCard());
+      const [card, remaining] = drawFromDeck(nextDeck);
+      nextDealerCards.push(card);
+      nextDeck = remaining;
     }
-    setDealerCards(nextDealerCards);
     const finalDealer = blackjackTotal(nextDealerCards);
-    if (finalDealer > 21 || playerTotal > finalDealer) {
-      win(`${current.name} ${playerTotal} beats dealer ${finalDealer}.`);
+    const nextHand = {
+      ...hand,
+      deck: nextDeck,
+      dealerCards: nextDealerCards,
+      dealerRevealed: true,
+    };
+    if (finalDealer > 21) {
+      win(nextHand, `Dealer busts at ${finalDealer}.`);
+      return;
+    }
+    if (playerTotal > finalDealer) {
+      win(nextHand, `${current.name} ${playerTotal} beats dealer ${finalDealer}.`);
       return;
     }
     if (playerTotal === finalDealer) {
-      win(`Push at ${playerTotal}. Challenge cleared.`);
+      push(nextHand, `Push at ${playerTotal}.`);
       return;
     }
-    lose(`Dealer ${finalDealer} beats ${current.name} ${playerTotal}.`);
+    lose(nextHand, `Dealer ${finalDealer} beats ${current.name} ${playerTotal}.`);
   };
 
   return (
     <div className="mini-card blackjack-card">
-      <div className="blackjack-hands">
-        <span>
-          {current.name}: {playerCards.join(' + ')} = <strong>{playerTotal}</strong>
-        </span>
-        <span>
-          Dealer: {dealerCards.join(' + ')} = <strong>{dealerTotal}</strong>
-        </span>
+      <div className="blackjack-table">
+        <div className="blackjack-hand">
+          <strong>
+            Dealer {dealerRevealed ? blackjackTotal(dealerCards) : dealerTotal}
+          </strong>
+          <div className="blackjack-card-row">
+            {dealerCards.map((card, index) => (
+              <PlayingCardView key={`${card.rank}-${card.suit}-${index}`} card={card} hidden={!dealerRevealed && index === 1} />
+            ))}
+          </div>
+        </div>
+        <div className="blackjack-hand">
+          <strong>
+            {current.name} {playerTotal}
+          </strong>
+          <div className="blackjack-card-row">
+            {playerCards.map((card, index) => (
+              <PlayingCardView key={`${card.rank}-${card.suit}-${index}`} card={card} />
+            ))}
+          </div>
+        </div>
       </div>
       <div className="button-row">
         <button className="secondary-button" type="button" disabled={locked} onClick={hit}>
@@ -2990,67 +3225,6 @@ function WireCutterMini({
             {wire.label}
           </button>
         ))}
-      </div>
-      <span>{message}</span>
-    </div>
-  );
-}
-
-function LockPickerMini({
-  current,
-  setLoserId,
-  markNoPenalty,
-}: {
-  current: Player;
-  setLoserId: (id: string | undefined) => void;
-  markNoPenalty: (winner?: string | undefined) => void;
-}) {
-  const [running, setRunning] = useState(false);
-  const [startedAt, setStartedAt] = useState<number | null>(null);
-  const [message, setMessage] = useState('Start the lock, then stop the marker in the gold zone.');
-  const [locked, setLocked] = useState(false);
-  const cycleMs = 1500;
-
-  const stop = () => {
-    if (!running || !startedAt || locked) {
-      return;
-    }
-    const elapsed = performance.now() - startedAt;
-    const angle = ((elapsed % cycleMs) / cycleMs) * 360;
-    const hit = angle >= 320 || angle <= 38;
-    setRunning(false);
-    setLocked(true);
-    if (hit) {
-      markNoPenalty(current.id);
-      setMessage(`Unlocked at ${Math.round(angle)} degrees.`);
-      return;
-    }
-    setLoserId(current.id);
-    setMessage(`Missed at ${Math.round(angle)} degrees.`);
-  };
-
-  return (
-    <div className="mini-card lock-card">
-      <div className={`lock-face ${running ? 'running' : ''}`} aria-label="Lock picker target">
-        <span className="lock-success-zone" />
-        <span className="lock-marker" />
-      </div>
-      <div className="button-row">
-        <button
-          className="secondary-button"
-          type="button"
-          disabled={running || locked}
-          onClick={() => {
-            setRunning(true);
-            setStartedAt(performance.now());
-            setMessage('Marker moving.');
-          }}
-        >
-          Start Lock
-        </button>
-        <button className="secondary-button" type="button" disabled={!running} onClick={stop}>
-          Stop Marker
-        </button>
       </div>
       <span>{message}</span>
     </div>
@@ -3301,7 +3475,6 @@ function minigameIcon(id: MinigameId): string {
     'colour-rush': 'Sparkles',
     blackjack: 'WalletCards',
     'wire-cutter': 'Split',
-    'lock-picker': 'Crosshair',
     'bomb-defuse': 'BadgeAlert',
     'number-guess': 'Hash',
     'trivia-blitz': 'CircleHelp',
