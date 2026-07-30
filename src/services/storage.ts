@@ -1,4 +1,5 @@
 import {
+  DEFAULT_SETTINGS,
   SAVE_SCHEMA_VERSION,
   type GameSettings,
   type GameState,
@@ -70,17 +71,22 @@ export function loadSettings<T extends GameSettings>(fallback: T): T {
 
   try {
     const parsed = JSON.parse(raw) as Partial<GameSettings>;
-    return {
-      ...fallback,
-      ...parsed,
-      musicVolume:
-        typeof parsed.musicVolume === 'number'
-          ? Math.max(0, Math.min(1, parsed.musicVolume))
-          : fallback.musicVolume,
-    };
+    return normaliseSettings(fallback, parsed);
   } catch {
     return fallback;
   }
+}
+
+function normaliseSettings<T extends GameSettings>(fallback: T, value: Partial<GameSettings>): T {
+  return {
+    ...fallback,
+    ...value,
+    difficulty: value.difficulty === 'blackout' ? 'blackout' : fallback.difficulty,
+    musicVolume:
+      typeof value.musicVolume === 'number'
+        ? Math.max(0, Math.min(1, value.musicVolume))
+        : fallback.musicVolume,
+  };
 }
 
 function validateSavedGame(value: unknown): {
@@ -116,7 +122,10 @@ function validateSavedGame(value: unknown): {
   }
   return {
     ok: true,
-    savedGame: candidate as SavedGame,
+    savedGame: {
+      ...(candidate as SavedGame),
+      settings: normaliseSettings(DEFAULT_SETTINGS, candidate.settings),
+    },
     reason: null,
   };
 }

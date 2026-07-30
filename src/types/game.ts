@@ -54,6 +54,8 @@ export type AssignmentTarget =
 
 export interface Assignment {
   target: AssignmentTarget;
+  secondary?: boolean;
+  autoNext?: boolean;
   drinks?: number;
   shots?: number;
   shields?: number;
@@ -186,12 +188,15 @@ export interface GameSettings {
   reducedMotion: boolean;
   exactRollToFinish: boolean;
   alcoholFreeMode: boolean;
+  difficulty: DifficultyLevel;
   confirmHighShotAssignments: boolean;
   keepScreenAwake: boolean;
   randomInitialOrder: boolean;
   showScoreboard: boolean;
   haptics: boolean;
 }
+
+export type DifficultyLevel = 'classic' | 'blackout';
 
 export interface SavedGame {
   schemaVersion: number;
@@ -225,6 +230,7 @@ export interface TileChoice {
   shieldUsedByPlayerId?: string;
   minigameWinnerId?: string;
   minigameLoserId?: string;
+  minigameNoPenalty?: boolean;
   skip?: boolean;
   spinnerResult?: SpinnerSegmentId;
 }
@@ -279,6 +285,7 @@ export const DEFAULT_SETTINGS: GameSettings = {
   reducedMotion: false,
   exactRollToFinish: false,
   alcoholFreeMode: false,
+  difficulty: 'classic',
   confirmHighShotAssignments: true,
   keepScreenAwake: true,
   randomInitialOrder: true,

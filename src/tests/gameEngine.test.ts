@@ -148,6 +148,74 @@ describe('game engine', () => {
     expect(getCurrentPlayer(resolved).drinks).toBe(1);
   });
 
+  it('applies Black Out difficulty pressure to late-game drink assignments', () => {
+    const base = makeGame();
+    const game = {
+      ...base,
+      turnPhase: 'resolving-tile' as const,
+      currentTileResolution: {
+        tileId: 1,
+        tileTitle: 'Welcome Sip',
+        startedAtTurn: base.turnNumber,
+        actionType: 'assign' as const,
+      },
+      players: base.players.map((player, index) =>
+        index === 0 ? { ...player, position: 50 } : player,
+      ),
+    };
+    const resolved = resolveCurrentTile(
+      game,
+      makeSettings({ difficulty: 'blackout' }),
+      new FixedRandomSource([1]),
+    );
+
+    expect(getCurrentPlayer(resolved).drinks).toBe(2);
+  });
+
+  it('assigns pair choices once to the primary and secondary players', () => {
+    const base = makeGame(3);
+    const game = {
+      ...base,
+      turnPhase: 'resolving-tile' as const,
+      currentTileResolution: {
+        tileId: 30,
+        tileTitle: 'Pick a Pair',
+        startedAtTurn: base.turnNumber,
+        actionType: 'choice' as const,
+      },
+    };
+    const resolved = resolveCurrentTile(game, makeSettings(), new FixedRandomSource([1]), {
+      targetPlayerId: base.players[1].id,
+      secondaryTargetPlayerId: base.players[2].id,
+    });
+
+    expect(resolved.players[0].drinks).toBe(0);
+    expect(resolved.players[1].drinks).toBe(1);
+    expect(resolved.players[2].drinks).toBe(1);
+  });
+
+  it('allows mini-games to resolve with no penalty when cleared', () => {
+    const base = makeGame();
+    const game = {
+      ...base,
+      turnPhase: 'resolving-tile' as const,
+      currentTileResolution: {
+        tileId: 11,
+        tileTitle: 'Reaction Tap',
+        startedAtTurn: base.turnNumber,
+        actionType: 'minigame' as const,
+        minigameId: 'reaction-tap' as const,
+      },
+    };
+    const resolved = resolveCurrentTile(game, makeSettings(), new FixedRandomSource([1]), {
+      minigameWinnerId: getCurrentPlayer(base).id,
+      minigameNoPenalty: true,
+    });
+
+    expect(getCurrentPlayer(resolved).drinks).toBe(0);
+    expect(getCurrentPlayer(resolved).statistics.minigamesWon).toBe(1);
+  });
+
   it('does not reduce scores below zero', () => {
     const game = applyManualAdjustment(makeGame(), getCurrentPlayer(makeGame()).id, -4, -2);
     const player = getCurrentPlayer(game);

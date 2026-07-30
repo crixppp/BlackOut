@@ -396,7 +396,7 @@ export function resolveCurrentTile(
   }
 
   if (choice.skip) {
-    return completeTurn(addHistory(state, `${tile.title} was skipped by the host.`));
+    return completeTurn(addHistory(state, `${tile.title} was skipped.`));
   }
 
   const next = tileActionHandlers[tile.actionType](state, tile, settings, random, choice);
@@ -480,7 +480,7 @@ export function applyManualAdjustment(
     shots: Math.max(0, player.shots + shotsDelta),
   }));
   const player = adjusted.players.find((entry) => entry.id === playerId);
-  return addHistory(adjusted, `${player?.name ?? 'A player'} score was adjusted by the host.`);
+  return addHistory(adjusted, `${player?.name ?? 'A player'} score was adjusted.`);
 }
 
 export function playAgainWithSamePlayers(state: GameState): GameState {
@@ -625,11 +625,12 @@ function completeGame(state: GameState): GameState {
 function resolveAssignments(
   state: GameState,
   assignments: Assignment[],
+  settings: GameSettings,
   random: RandomSource,
   choice: TileChoice,
 ): GameState {
   return assignments.reduce(
-    (nextState, assignment) => applyAssignment(nextState, assignment, random, choice),
+    (nextState, assignment) => applyAssignment(nextState, assignment, settings, random, choice),
     state,
   );
 }
@@ -637,14 +638,16 @@ function resolveAssignments(
 function applyAssignment(
   state: GameState,
   assignment: Assignment,
+  settings: GameSettings,
   random: RandomSource,
   choice: TileChoice,
 ): GameState {
+  const scaledAssignment = scaleAssignmentForDifficulty(state, assignment, settings);
   const targets = resolveAssignmentTargets(state, assignment, random, choice);
   return targets.reduce((nextState, target) => {
     const result = updatePlayer(nextState, target.id, (player) => {
-      const drinkCount = assignment.drinks ?? 0;
-      const shotCount = assignment.shots ?? 0;
+      const drinkCount = scaledAssignment.drinks ?? 0;
+      const shotCount = scaledAssignment.shots ?? 0;
       const useShield =
         choice.shieldUsedByPlayerId === player.id && drinkCount > 0 && player.shields > 0;
       const useGolden =
@@ -658,12 +661,15 @@ function applyAssignment(
 
       return {
         ...player,
-        drinks: Math.max(0, player.drinks + effectiveDrinks - (assignment.removeDrinks ?? 0)),
-        shots: Math.max(0, player.shots + effectiveShots - (assignment.removeShots ?? 0)),
-        shields: Math.max(0, player.shields + (assignment.shields ?? 0) - (useShield ? 1 : 0)),
+        drinks: Math.max(0, player.drinks + effectiveDrinks - (scaledAssignment.removeDrinks ?? 0)),
+        shots: Math.max(0, player.shots + effectiveShots - (scaledAssignment.removeShots ?? 0)),
+        shields: Math.max(
+          0,
+          player.shields + (scaledAssignment.shields ?? 0) - (useShield ? 1 : 0),
+        ),
         goldenShields: Math.max(
           0,
-          player.goldenShields + (assignment.goldenShields ?? 0) - (useGolden ? 1 : 0),
+          player.goldenShields + (scaledAssignment.goldenShields ?? 0) - (useGolden ? 1 : 0),
         ),
         statistics: {
           ...player.statistics,
@@ -674,9 +680,37 @@ function applyAssignment(
     });
 
     const targetAfter = result.players.find((player) => player.id === target.id) ?? target;
-    const messages = assignmentMessages(target.name, targetAfter, assignment);
+    const messages = assignmentMessages(target.name, targetAfter, scaledAssignment);
     return messages.reduce((messageState, message) => addHistory(messageState, message), result);
   }, state);
+}
+
+function scaleAssignmentForDifficulty(
+  state: GameState,
+  assignment: Assignment,
+  settings: GameSettings,
+): Assignment {
+  if (settings.difficulty !== 'blackout') {
+    return assignment;
+  }
+
+  const current = getCurrentPlayer(state);
+  const progress = current.position / FINISH_POSITION;
+  const drinks = assignment.drinks ?? 0;
+  const shots = assignment.shots ?? 0;
+
+  if (drinks <= 0 && shots <= 0) {
+    return assignment;
+  }
+
+  const lateDrinkBonus = drinks > 0 && progress >= 0.68 && assignment.target !== 'everyone' ? 1 : 0;
+  const finishLineDrinkBonus = shots > 0 && progress >= 0.82 ? 1 : 0;
+
+  return {
+    ...assignment,
+    drinks: drinks + lateDrinkBonus + finishLineDrinkBonus || undefined,
+    shots: shots || undefined,
+  };
 }
 
 function assignmentMessages(targetName: string, target: Player, assignment: Assignment): string[] {
@@ -721,16 +755,22 @@ function resolveAssignmentTargets(
     case 'current':
       return [current];
     case 'chosen': {
+      if (assignment.autoNext) {
+        const nextPlayer = state.players[nextActivePlayerIndex(state, state.currentPlayerIndex)];
+        return nextPlayer ? [nextPlayer] : [current];
+      }
+      if (assignment.secondary) {
+        const secondary =
+          state.players.find(
+            (player) => player.id === choice.secondaryTargetPlayerId && !player.finished,
+          ) ?? getEligibleTargets(state, false)[0];
+        return secondary ? [secondary] : [current];
+      }
       const id = choice.targetPlayerId;
       const fallback = getEligibleTargets(state, true)[0];
       const target =
         state.players.find((player) => player.id === id && !player.finished) ?? fallback;
-      const secondary = choice.secondaryTargetPlayerId
-        ? state.players.find(
-            (player) => player.id === choice.secondaryTargetPlayerId && !player.finished,
-          )
-        : undefined;
-      return secondary ? [target, secondary] : [target].filter(Boolean);
+      return [target].filter(Boolean);
     }
     case 'random':
       return [random.pick(getEligibleTargets(state, true))];
@@ -791,9 +831,9 @@ type TileActionHandler = (
 
 export const tileActionHandlers: Record<BoardTile['actionType'], TileActionHandler> = {
   assign: (state, tile, _settings, random, choice) =>
-    resolveAssignments(state, getAssignments(tile), random, choice),
+    resolveAssignments(state, getAssignments(tile), _settings, random, choice),
   choice: (state, tile, _settings, random, choice) =>
-    resolveAssignments(state, getAssignments(tile), random, choice),
+    resolveAssignments(state, getAssignments(tile), _settings, random, choice),
   group: (state, tile, _settings, random, choice) => {
     if (tile.actionConfig?.halfRound === true) {
       const currentIndex = state.currentPlayerIndex;
@@ -805,13 +845,14 @@ export const tileActionHandlers: Record<BoardTile['actionType'], TileActionHandl
           resolveAssignments(
             nextState,
             [{ target: 'chosen', drinks: getNumber(tile.actionConfig, 'drinks', 1) }],
+            _settings,
             random,
             { ...choice, targetPlayerId: target.id },
           ),
         state,
       );
     }
-    return resolveAssignments(state, getAssignments(tile), random, choice);
+    return resolveAssignments(state, getAssignments(tile), _settings, random, choice);
   },
   shield: (state, tile, _settings, random, choice) => {
     const target = tile.actionConfig?.target === 'everyone' ? 'everyone' : 'current';
@@ -820,19 +861,21 @@ export const tileActionHandlers: Record<BoardTile['actionType'], TileActionHandl
       shields: getNumber(tile.actionConfig, 'shields', 0),
       goldenShields: getNumber(tile.actionConfig, 'goldenShields', 0),
     };
-    return resolveAssignments(state, [assignment], random, choice);
+    return resolveAssignments(state, [assignment], _settings, random, choice);
   },
   recover: (state, tile, _settings, random, choice) =>
-    resolveAssignments(state, getAssignments(tile), random, choice),
+    resolveAssignments(state, getAssignments(tile), _settings, random, choice),
   movement: (state, tile, settings, random, choice) =>
     applyMovementTile(state, tile, settings, random, choice),
   minigame: (state, tile, _settings, random, choice) => {
-    const loserId = choice.minigameLoserId ?? choice.targetPlayerId;
+    const loserId = choice.minigameNoPenalty
+      ? undefined
+      : (choice.minigameLoserId ?? choice.targetPlayerId);
     const winnerId = choice.minigameWinnerId;
     let next = state;
     if (loserId) {
       const drinks = getNumber(tile.actionConfig, 'loserDrinks', 1);
-      next = resolveAssignments(next, [{ target: 'chosen', drinks }], random, {
+      next = resolveAssignments(next, [{ target: 'chosen', drinks }], _settings, random, {
         ...choice,
         targetPlayerId: loserId,
       });
@@ -849,19 +892,37 @@ export const tileActionHandlers: Record<BoardTile['actionType'], TileActionHandl
     }
     return addHistory(next, `${tile.title} was resolved.`);
   },
-  spinner: (state, _tile, _settings, random, choice) =>
-    resolveSpinnerResult(state, choice.spinnerResult ?? pickSpinnerSegment(random), random, choice),
+  spinner: (state, _tile, settings, random, choice) =>
+    resolveSpinnerResult(
+      state,
+      choice.spinnerResult ?? pickSpinnerSegment(random),
+      settings,
+      random,
+      choice,
+    ),
   vote: (state, tile, _settings, random, choice) => {
     const drinks = getNumber(tile.actionConfig, 'drinks', 1);
-    return resolveAssignments(state, [{ target: 'chosen', drinks }], random, choice);
+    return resolveAssignments(state, [{ target: 'chosen', drinks }], _settings, random, choice);
   },
   'random-outcome': (state, tile, settings, random, choice) => {
     if (tile.actionConfig?.shieldCheck === true) {
       const current = getCurrentPlayer(state);
       if (current.shields > 0) {
-        return resolveAssignments(state, [{ target: 'chosen', drinks: 1 }], random, choice);
+        return resolveAssignments(
+          state,
+          [{ target: 'chosen', drinks: 1 }],
+          settings,
+          random,
+          choice,
+        );
       }
-      return resolveAssignments(state, [{ target: 'current', drinks: 1 }], random, choice);
+      return resolveAssignments(
+        state,
+        [{ target: 'current', drinks: 1 }],
+        settings,
+        random,
+        choice,
+      );
     }
 
     const outcomes = getOutcomes(tile);
@@ -871,7 +932,7 @@ export const tileActionHandlers: Record<BoardTile['actionType'], TileActionHandl
     }
     let next = addHistory(state, `${tile.title}: ${outcome.label}.`);
     if (outcome.assignments) {
-      next = resolveAssignments(next, outcome.assignments, random, choice);
+      next = resolveAssignments(next, outcome.assignments, settings, random, choice);
     }
     if (outcome.movement) {
       next = applyMovementOffset(next, outcome.movement, settings);
@@ -903,41 +964,67 @@ export const tileActionHandlers: Record<BoardTile['actionType'], TileActionHandl
       }),
     );
   },
-  'card-guess': (state, tile, _settings, random, choice) => {
+  'card-guess': (state, tile, settings, random, choice) => {
     const correct = random.integer(0, 1) === 1;
     const drinks = getNumber(tile.actionConfig, 'drinks', 1);
     return correct
       ? resolveAssignments(
           addHistory(state, 'Card prediction was correct.'),
           [{ target: 'chosen', drinks }],
+          settings,
           random,
           choice,
         )
       : resolveAssignments(
           addHistory(state, 'Card prediction missed.'),
           [{ target: 'current', drinks }],
+          settings,
           random,
           choice,
         );
   },
-  'high-roller': (state, tile, _settings, random, choice) => {
+  'high-roller': (state, tile, settings, random, choice) => {
     const roll = random.integer(1, 6);
     const lateGame = tile.actionConfig?.lateGame === true;
     const withRoll = addHistory(state, `Bonus die rolled ${roll}.`);
     if (lateGame) {
       if (roll <= 2) {
-        return resolveAssignments(withRoll, [{ target: 'current', shots: 1 }], random, choice);
+        return resolveAssignments(
+          withRoll,
+          [{ target: 'current', shots: 1 }],
+          settings,
+          random,
+          choice,
+        );
       }
       if (roll >= 5) {
-        return resolveAssignments(withRoll, [{ target: 'chosen', shots: 1 }], random, choice);
+        return resolveAssignments(
+          withRoll,
+          [{ target: 'chosen', shots: 1 }],
+          settings,
+          random,
+          choice,
+        );
       }
       return addHistory(withRoll, 'Middle roll. No score change.');
     }
     if (roll <= 2) {
-      return resolveAssignments(withRoll, [{ target: 'current', drinks: 2 }], random, choice);
+      return resolveAssignments(
+        withRoll,
+        [{ target: 'current', drinks: 2 }],
+        settings,
+        random,
+        choice,
+      );
     }
     if (roll >= 5) {
-      return resolveAssignments(withRoll, [{ target: 'chosen', drinks: 2 }], random, choice);
+      return resolveAssignments(
+        withRoll,
+        [{ target: 'chosen', drinks: 2 }],
+        settings,
+        random,
+        choice,
+      );
     }
     return addHistory(withRoll, 'Middle roll. No score change.');
   },
@@ -948,27 +1035,70 @@ export const tileActionHandlers: Record<BoardTile['actionType'], TileActionHandl
 function resolveSpinnerResult(
   state: GameState,
   segmentId: SpinnerSegmentId,
+  settings: GameSettings,
   random: RandomSource,
   choice: TileChoice,
 ): GameState {
   const withHistory = addHistory(state, `Spinner landed on ${segmentId}.`);
   switch (segmentId) {
     case 'one-drink':
-      return resolveAssignments(withHistory, [{ target: 'current', drinks: 1 }], random, choice);
+      return resolveAssignments(
+        withHistory,
+        [{ target: 'current', drinks: 1 }],
+        settings,
+        random,
+        choice,
+      );
     case 'two-drinks':
-      return resolveAssignments(withHistory, [{ target: 'current', drinks: 2 }], random, choice);
+      return resolveAssignments(
+        withHistory,
+        [{ target: 'current', drinks: 2 }],
+        settings,
+        random,
+        choice,
+      );
     case 'one-shot':
-      return resolveAssignments(withHistory, [{ target: 'current', shots: 1 }], random, choice);
+      return resolveAssignments(
+        withHistory,
+        [{ target: 'current', shots: 1 }],
+        settings,
+        random,
+        choice,
+      );
     case 'choose-player':
-      return resolveAssignments(withHistory, [{ target: 'chosen', drinks: 1 }], random, choice);
+      return resolveAssignments(
+        withHistory,
+        [{ target: 'chosen', drinks: 1 }],
+        settings,
+        random,
+        choice,
+      );
     case 'all-players':
-      return resolveAssignments(withHistory, [{ target: 'everyone', drinks: 1 }], random, choice);
+      return resolveAssignments(
+        withHistory,
+        [{ target: 'everyone', drinks: 1 }],
+        settings,
+        random,
+        choice,
+      );
     case 'shield':
-      return resolveAssignments(withHistory, [{ target: 'current', shields: 1 }], random, choice);
+      return resolveAssignments(
+        withHistory,
+        [{ target: 'current', shields: 1 }],
+        settings,
+        random,
+        choice,
+      );
     case 'safe':
       return addHistory(withHistory, 'Spinner gave a safe result.');
     case 'spin-again':
-      return resolveSpinnerResult(withHistory, pickSpinnerSegment(random), random, choice);
+      return resolveSpinnerResult(
+        withHistory,
+        pickSpinnerSegment(random),
+        settings,
+        random,
+        choice,
+      );
   }
 }
 
@@ -1009,7 +1139,13 @@ function applyMovementTile(
     if (current.position < maxPosition) {
       return applyMovementOffset(state, getNumber(tile.actionConfig, 'offset', 2), settings);
     }
-    return resolveAssignments(state, [{ target: 'current', removeDrinks: 1 }], random, {});
+    return resolveAssignments(
+      state,
+      [{ target: 'current', removeDrinks: 1 }],
+      settings,
+      random,
+      {},
+    );
   }
   return applyMovementOffset(state, getNumber(tile.actionConfig, 'offset', 0), settings);
 }

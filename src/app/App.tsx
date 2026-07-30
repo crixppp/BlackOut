@@ -39,7 +39,6 @@ import {
   ListPlus,
   Megaphone,
   Menu,
-  Minus,
   MousePointer2,
   MousePointerClick,
   PackageOpen,
@@ -51,7 +50,6 @@ import {
   RotateCcw,
   RotateCw,
   Rows3,
-  Save,
   Send,
   Shield,
   ShieldCheck,
@@ -82,7 +80,6 @@ import { BOARD_TILES, SPINNER_SEGMENTS, getTileById } from '../data/tiles';
 import { CATEGORY_PROMPTS, SORTING_PUZZLES, TRIVIA_QUESTIONS } from '../data/prompts';
 import {
   advanceMovementToEnd,
-  applyManualAdjustment,
   beginMovement,
   createNewGame,
   createPlayerDraft,
@@ -102,13 +99,13 @@ import { CryptoRandomSource } from '../engine/random';
 import { useAudio } from '../hooks/useAudio';
 import { useWakeLock } from '../hooks/useWakeLock';
 import {
-  BOARD_TILE_COUNT,
   DEFAULT_SETTINGS,
   FINISH_POSITION,
   MAX_PLAYERS,
   MIN_PLAYERS,
   PLAYER_COLOURS,
   type BoardTile,
+  type DifficultyLevel,
   type GameSettings,
   type GameState,
   type MinigameId,
@@ -118,7 +115,6 @@ import {
   type SpinnerSegmentId,
   type TileChoice,
 } from '../types/game';
-import { createId } from '../utils/ids';
 import { compactList, drinkWord, shotWord } from '../utils/text';
 import {
   clearSavedGame,
@@ -146,14 +142,12 @@ const Icons = {
   Home,
   Leaf,
   Menu,
-  Minus,
   Play,
   Plus,
   RefreshCw,
   Rewind,
   RotateCcw,
   RotateCw,
-  Save,
   Shuffle,
   SkipForward,
   Trash2,
@@ -218,6 +212,20 @@ const ICONS: Record<string, LucideIcon> = {
   Zap,
 };
 const randomSource = new CryptoRandomSource();
+const BOARD_PATH_COLUMNS = 10;
+const BOARD_PATH_TILE_SIZE = 106;
+const BOARD_PATH_X_GAP = 34;
+const BOARD_PATH_Y_GAP = 46;
+const BOARD_PATH_PADDING = 18;
+const BOARD_PATH_ROWS = Math.ceil((FINISH_POSITION + 1) / BOARD_PATH_COLUMNS);
+const BOARD_PATH_WIDTH =
+  BOARD_PATH_PADDING * 2 +
+  BOARD_PATH_COLUMNS * BOARD_PATH_TILE_SIZE +
+  (BOARD_PATH_COLUMNS - 1) * BOARD_PATH_X_GAP;
+const BOARD_PATH_HEIGHT =
+  BOARD_PATH_PADDING * 2 +
+  BOARD_PATH_ROWS * BOARD_PATH_TILE_SIZE +
+  (BOARD_PATH_ROWS - 1) * BOARD_PATH_Y_GAP;
 
 function Icon({ name, label }: { name: string; label?: string }) {
   const LucideIcon = ICONS[name] ?? ICONS.Circle;
@@ -275,7 +283,7 @@ export function App() {
     if (game.turnPhase === 'rolling') {
       const timeout = window.setTimeout(() => {
         setGame((current) => (current ? beginMovement(current) : current));
-      }, 950);
+      }, 1250);
       return () => window.clearTimeout(timeout);
     }
     if (game.turnPhase === 'moving') {
@@ -406,7 +414,6 @@ export function App() {
           game={game}
           settings={settings}
           setGame={setGame}
-          setSettings={setSettings}
           setScreen={setScreen}
           pauseOpen={pauseOpen}
           setPauseOpen={setPauseOpen}
@@ -571,7 +578,7 @@ function HowToPlay({ onBack }: { onBack: () => void }) {
       <div className="rule-list">
         <p>Add 2 to 10 players, choose counter colours, and start everyone at Start.</p>
         <p>Pass the device around. On each turn, roll the die, move, then resolve the tile.</p>
-        <p>Every action can be confirmed, corrected, skipped, or adjusted by the host.</p>
+        <p>Every tile can be confirmed or skipped, and the pause menu can restart the turn.</p>
         <p>
           The first player to reach Finish wins, and the game continues until everyone finishes.
         </p>
@@ -789,6 +796,10 @@ function SettingsPanel({
             }
           />
         </label>
+        <DifficultySelector
+          value={settings.difficulty}
+          onChange={(difficulty) => setSettings({ ...settings, difficulty })}
+        />
         <Toggle
           label="Sound effects"
           checked={settings.soundEffects}
@@ -834,6 +845,52 @@ function SettingsPanel({
   );
 }
 
+const difficultyOptions: Array<{
+  value: DifficultyLevel;
+  label: string;
+  description: string;
+}> = [
+  {
+    value: 'classic',
+    label: 'Classic',
+    description: 'Use the board values exactly as written.',
+  },
+  {
+    value: 'blackout',
+    label: 'Black Out',
+    description: 'Late-game drink tiles hit harder.',
+  },
+];
+
+function DifficultySelector({
+  value,
+  onChange,
+}: {
+  value: DifficultyLevel;
+  onChange: (value: DifficultyLevel) => void;
+}) {
+  return (
+    <fieldset className="difficulty-control">
+      <legend>Difficulty</legend>
+      <div className="difficulty-options">
+        {difficultyOptions.map((option) => (
+          <button
+            key={option.value}
+            className={`difficulty-button ${value === option.value ? 'selected' : ''}`}
+            type="button"
+            aria-pressed={value === option.value}
+            title={option.description}
+            onClick={() => onChange(option.value)}
+          >
+            <strong>{option.label}</strong>
+            <span>{option.description}</span>
+          </button>
+        ))}
+      </div>
+    </fieldset>
+  );
+}
+
 function Toggle({
   label,
   checked,
@@ -859,7 +916,6 @@ function GameScreen({
   game,
   settings,
   setGame,
-  setSettings,
   setScreen,
   pauseOpen,
   setPauseOpen,
@@ -868,7 +924,6 @@ function GameScreen({
   game: GameState;
   settings: GameSettings;
   setGame: React.Dispatch<React.SetStateAction<GameState | null>>;
-  setSettings: (settings: GameSettings) => void;
   setScreen: (screen: ScreenName) => void;
   pauseOpen: boolean;
   setPauseOpen: (open: boolean) => void;
@@ -896,14 +951,9 @@ function GameScreen({
 
       <Board game={game} settings={settings} />
 
-      <TurnModal game={game} settings={settings} setGame={setGame} />
+      <GameControlDock game={game} settings={settings} setGame={setGame} />
       {game.currentTileResolution && (
-        <TileActionModal
-          game={game}
-          settings={settings}
-          setGame={setGame}
-          setSettings={setSettings}
-        />
+        <TileActionModal game={game} settings={settings} setGame={setGame} />
       )}
       {pauseOpen && (
         <PauseMenu
@@ -929,9 +979,31 @@ function Board({ game, settings }: { game: GameState; settings: GameSettings }) 
       { position: FINISH_POSITION, tile: null, label: 'Finish' },
     ];
   }, []);
+  const pathSpaces = useMemo(
+    () =>
+      spaces.map((space) => ({
+        ...space,
+        point: boardPathPoint(space.position),
+      })),
+    [spaces],
+  );
+  const pathLine = useMemo(
+    () =>
+      pathSpaces
+        .map(
+          ({ point }) =>
+            `${point.x + BOARD_PATH_TILE_SIZE / 2},${point.y + BOARD_PATH_TILE_SIZE / 2}`,
+        )
+        .join(' '),
+    [pathSpaces],
+  );
 
   useEffect(() => {
-    activeTileRef.current?.scrollIntoView({
+    if (typeof activeTileRef.current?.scrollIntoView !== 'function') {
+      return;
+    }
+
+    activeTileRef.current.scrollIntoView({
       block: 'center',
       inline: 'center',
       behavior: settings.reducedMotion ? 'auto' : 'smooth',
@@ -965,8 +1037,23 @@ function Board({ game, settings }: { game: GameState; settings: GameSettings }) 
         </div>
       </div>
       <div className="board-scroll" ref={scrollRef}>
-        <div className="board-grid">
-          {spaces.map((space) => {
+        <div
+          className="board-path"
+          style={
+            {
+              '--board-path-width': `${BOARD_PATH_WIDTH}px`,
+              '--board-path-height': `${BOARD_PATH_HEIGHT}px`,
+            } as CSSProperties
+          }
+        >
+          <svg
+            className="board-path-line"
+            viewBox={`0 0 ${BOARD_PATH_WIDTH} ${BOARD_PATH_HEIGHT}`}
+            aria-hidden="true"
+          >
+            <polyline points={pathLine} />
+          </svg>
+          {pathSpaces.map((space) => {
             const playersHere = game.players.filter((player) => player.position === space.position);
             const isActive = current.position === space.position;
             return (
@@ -975,6 +1062,7 @@ function Board({ game, settings }: { game: GameState; settings: GameSettings }) 
                 position={space.position}
                 tile={space.tile}
                 label={space.label}
+                point={space.point}
                 players={playersHere}
                 isActive={isActive}
                 refCallback={(node) => {
@@ -995,6 +1083,7 @@ function BoardSpace({
   position,
   tile,
   label,
+  point,
   players,
   isActive,
   refCallback,
@@ -1002,16 +1091,16 @@ function BoardSpace({
   position: number;
   tile: BoardTile | null;
   label: string;
+  point: { x: number; y: number };
   players: Player[];
   isActive: boolean;
   refCallback: (node: HTMLDivElement | null) => void;
 }) {
-  const coords = boardCoordinates(position);
   return (
     <div
       ref={refCallback}
       className={`board-tile variant-${tile?.backgroundVariant ?? (position === 0 ? 'start' : 'finish')} ${isActive ? 'active' : ''}`}
-      style={{ gridColumn: coords.column, gridRow: coords.row } as CSSProperties}
+      style={{ left: point.x, top: point.y } as CSSProperties}
     >
       <div className="tile-number">
         {position === 0 ? 'START' : position === FINISH_POSITION ? 'FINISH' : position}
@@ -1038,15 +1127,13 @@ function BoardSpace({
   );
 }
 
-function boardCoordinates(position: number): { column: number; row: number } {
-  const columns = 8;
-  const rows = Math.ceil((BOARD_TILE_COUNT + 2) / columns);
-  const rowFromBottom = Math.floor(position / columns);
-  const leftToRight = rowFromBottom % 2 === 0;
-  const column = leftToRight ? (position % columns) + 1 : columns - (position % columns);
+function boardPathPoint(position: number): { x: number; y: number } {
+  const row = Math.floor(position / BOARD_PATH_COLUMNS);
+  const rowIndex = position % BOARD_PATH_COLUMNS;
+  const column = row % 2 === 0 ? rowIndex : BOARD_PATH_COLUMNS - 1 - rowIndex;
   return {
-    column,
-    row: rows - rowFromBottom,
+    x: BOARD_PATH_PADDING + column * (BOARD_PATH_TILE_SIZE + BOARD_PATH_X_GAP),
+    y: BOARD_PATH_PADDING + row * (BOARD_PATH_TILE_SIZE + BOARD_PATH_Y_GAP),
   };
 }
 
@@ -1082,7 +1169,7 @@ function Scoreboard({
   );
 }
 
-function TurnModal({
+function GameControlDock({
   game,
   settings,
   setGame,
@@ -1100,19 +1187,22 @@ function TurnModal({
     }
   }, [current.name, game.pendingRoll]);
 
-  if (game.turnPhase === 'resolving-tile' || game.turnPhase === 'game-complete') {
+  if (game.turnPhase === 'game-complete') {
     return null;
   }
 
+  const rollValue = game.pendingRoll?.value ?? 1;
+  const status = rollStatus(game);
+
   return (
-    <Modal title={`${current.name}'s turn`} className="turn-modal">
+    <section className="game-control-dock" aria-label={`${current.name}'s turn controls`}>
       <div aria-live="polite" className="sr-only">
         {announced}
       </div>
-      <div className="turn-player" style={{ '--player-colour': current.colour } as CSSProperties}>
-        <span className="large-counter">{current.name.slice(0, 1).toUpperCase()}</span>
+      <div className="dock-player" style={{ '--player-colour': current.colour } as CSSProperties}>
+        <span className="dock-counter">{current.name.slice(0, 1).toUpperCase()}</span>
         <div>
-          <h2>{current.name}</h2>
+          <strong>{current.name}</strong>
           <p>
             Space {current.position} · {current.drinks}{' '}
             {drinkWord(current.drinks, settings.alcoholFreeMode)} · {current.shots}{' '}
@@ -1120,23 +1210,34 @@ function TurnModal({
           </p>
         </div>
       </div>
-      <DiceView value={game.pendingRoll?.value ?? 1} rolling={game.turnPhase === 'rolling'} />
-      {game.turnPhase === 'awaiting-roll' && (
-        <button
-          className="primary-button huge"
-          type="button"
-          onClick={() =>
-            setGame((state) => (state ? rollDice(state, settings, randomSource) : state))
-          }
-        >
-          <Icons.Dices aria-hidden="true" />
-          Roll Dice
-        </button>
-      )}
-      {game.turnPhase === 'rolling' && <p className="motion-label">Rolling...</p>}
-      {game.turnPhase === 'moving' && (
-        <div className="button-row">
-          <p className="motion-label">Moving {game.pendingRoll?.value} spaces</p>
+
+      <DiceRollIndicator value={rollValue} rolling={game.turnPhase === 'rolling'} />
+
+      <div className="dock-status">
+        <strong>{status.title}</strong>
+        <span>{status.detail}</span>
+      </div>
+
+      <div className="dock-actions">
+        {game.turnPhase === 'awaiting-roll' && (
+          <button
+            className="primary-button"
+            type="button"
+            onClick={() =>
+              setGame((state) => (state ? rollDice(state, settings, randomSource) : state))
+            }
+          >
+            <Icons.Dices aria-hidden="true" />
+            Roll Dice
+          </button>
+        )}
+        {game.turnPhase === 'rolling' && (
+          <button className="primary-button" type="button" disabled>
+            <Icons.Dices aria-hidden="true" />
+            Rolling
+          </button>
+        )}
+        {game.turnPhase === 'moving' && (
           <button
             className="secondary-button"
             type="button"
@@ -1145,13 +1246,8 @@ function TurnModal({
             <Icons.SkipForward aria-hidden="true" />
             Skip Animation
           </button>
-        </div>
-      )}
-      {game.turnPhase === 'confirming-result' && (
-        <div className="stack">
-          <p>
-            Exact roll required. {current.name} stays on space {current.position}.
-          </p>
+        )}
+        {game.turnPhase === 'confirming-result' && (
           <button
             className="primary-button"
             type="button"
@@ -1160,30 +1256,82 @@ function TurnModal({
             <Icons.Check aria-hidden="true" />
             End Turn
           </button>
-        </div>
-      )}
-      {game.turnPhase === 'turn-complete' && (
-        <button
-          className="primary-button huge"
-          type="button"
-          onClick={() => setGame((state) => (state ? moveToNextTurn(state) : state))}
-        >
-          <Icons.ArrowRight aria-hidden="true" />
-          Next Player
-        </button>
-      )}
-    </Modal>
+        )}
+        {game.turnPhase === 'turn-complete' && (
+          <button
+            className="primary-button"
+            type="button"
+            onClick={() => setGame((state) => (state ? moveToNextTurn(state) : state))}
+          >
+            <Icons.ArrowRight aria-hidden="true" />
+            Next Player
+          </button>
+        )}
+      </div>
+    </section>
   );
 }
 
-function DiceView({ value, rolling }: { value: number; rolling: boolean }) {
+function rollStatus(game: GameState): { title: string; detail: string } {
+  const current = getCurrentPlayer(game);
+  switch (game.turnPhase) {
+    case 'awaiting-roll':
+      return { title: 'Ready', detail: 'Roll when everyone can see the board.' };
+    case 'rolling':
+      return { title: 'Shaking...', detail: 'Result is hidden until the dice settle.' };
+    case 'moving':
+      return {
+        title: `Rolled ${game.pendingRoll?.value ?? 0}`,
+        detail: `Moving toward space ${game.pendingRoll?.target ?? current.position}.`,
+      };
+    case 'resolving-tile':
+      return { title: 'Tile landed', detail: 'Resolve the space, then pass the device.' };
+    case 'confirming-result':
+      return {
+        title: 'Exact roll missed',
+        detail: `${current.name} stays on space ${current.position}.`,
+      };
+    case 'turn-complete':
+      return { title: 'Turn complete', detail: 'Pass to the next player.' };
+    default:
+      return { title: 'In progress', detail: `Turn ${game.turnNumber}` };
+  }
+}
+
+const dicePips: Record<number, number[]> = {
+  1: [5],
+  2: [1, 9],
+  3: [1, 5, 9],
+  4: [1, 3, 7, 9],
+  5: [1, 3, 5, 7, 9],
+  6: [1, 3, 4, 6, 7, 9],
+};
+
+function DiceRollIndicator({ value, rolling }: { value: number; rolling: boolean }) {
+  const [displayValue, setDisplayValue] = useState(value);
+
+  useEffect(() => {
+    if (!rolling) {
+      setDisplayValue(value);
+      return;
+    }
+    const interval = window.setInterval(() => {
+      setDisplayValue((face) => (face % 6) + 1);
+    }, 86);
+    return () => window.clearInterval(interval);
+  }, [rolling, value]);
+
   return (
     <div
-      className={`dice ${rolling ? 'rolling' : ''}`}
+      className={`dice-mini ${rolling ? 'rolling' : ''}`}
       role="img"
-      aria-label={`Dice face ${value}`}
+      aria-label={rolling ? 'Dice rolling' : `Dice face ${value}`}
     >
-      {value}
+      {Array.from({ length: 9 }, (_, index) => {
+        const pipIndex = index + 1;
+        const active = dicePips[displayValue]?.includes(pipIndex);
+        return <span key={pipIndex} className={active ? 'pip active' : 'pip'} />;
+      })}
     </div>
   );
 }
@@ -1192,12 +1340,10 @@ function TileActionModal({
   game,
   settings,
   setGame,
-  setSettings,
 }: {
   game: GameState;
   settings: GameSettings;
   setGame: React.Dispatch<React.SetStateAction<GameState | null>>;
-  setSettings: (settings: GameSettings) => void;
 }) {
   const resolution = game.currentTileResolution;
   const tile = resolution ? getTileById(resolution.tileId) : undefined;
@@ -1210,16 +1356,29 @@ function TileActionModal({
   const [spinnerResult, setSpinnerResult] = useState<SpinnerSegmentId | undefined>();
   const [minigameLoserId, setMinigameLoserId] = useState<string | undefined>();
   const [minigameWinnerId, setMinigameWinnerId] = useState<string | undefined>();
-  const [hostOpen, setHostOpen] = useState(false);
-  const [minigameNonce, setMinigameNonce] = useState(createId('mini'));
+  const [minigameNoPenalty, setMinigameNoPenalty] = useState(false);
   const actionSubmittedRef = useRef(false);
+  const targetIncludesCurrent =
+    !tile || (tile.actionType !== 'choice' && tile.actionType !== 'buddy')
+      ? true
+      : tile.actionConfig?.allowSelf !== false;
+  const targets = useMemo(
+    () => getEligibleTargets(game, targetIncludesCurrent),
+    [game, targetIncludesCurrent],
+  );
+  const secondaryTargets = targets.filter((player) => player.id !== targetId);
+
+  useEffect(() => {
+    if (targets.length > 0 && !targets.some((player) => player.id === targetId)) {
+      setTargetId(targets[0].id);
+    }
+  }, [targetId, targets]);
 
   if (!tile) {
     return null;
   }
 
   const display = settings.alcoholFreeMode ? tile.alcoholFreeText : tile;
-  const targets = getEligibleTargets(game, true);
   const selectedPlayer = game.players.find((player) => player.id === targetId) ?? targets[0];
   const canUseShield =
     selectedPlayer && (selectedPlayer.shields > 0 || selectedPlayer.goldenShields > 0);
@@ -1231,13 +1390,16 @@ function TileActionModal({
       return;
     }
     actionSubmittedRef.current = true;
+    const effectiveSecondaryTargetId =
+      tile.id === 30 ? (secondaryTargetId ?? secondaryTargets[0]?.id) : secondaryTargetId;
     const choice: TileChoice = {
       targetPlayerId: targetId,
-      secondaryTargetPlayerId: secondaryTargetId,
+      secondaryTargetPlayerId: effectiveSecondaryTargetId,
       shieldUsedByPlayerId: shieldTargetId,
       spinnerResult,
       minigameLoserId,
       minigameWinnerId,
+      minigameNoPenalty,
       ...extra,
     };
     setGame((state) => (state ? resolveCurrentTile(state, settings, randomSource, choice) : state));
@@ -1274,8 +1436,8 @@ function TileActionModal({
       {tile.id === 30 && (
         <PlayerSelect
           label="Second selected player"
-          players={targets}
-          value={secondaryTargetId ?? targetId}
+          players={secondaryTargets.length > 0 ? secondaryTargets : targets}
+          value={secondaryTargetId ?? secondaryTargets[0]?.id ?? targetId}
           onChange={setSecondaryTargetId}
         />
       )}
@@ -1289,7 +1451,7 @@ function TileActionModal({
 
       {isMinigame && (
         <MinigamePanel
-          key={minigameNonce}
+          key={`${tile.id}-${resolution?.startedAtTurn ?? game.turnNumber}`}
           id={String(tile.actionConfig?.minigameId) as MinigameId}
           game={game}
           settings={settings}
@@ -1297,6 +1459,8 @@ function TileActionModal({
           winnerId={minigameWinnerId}
           setLoserId={setMinigameLoserId}
           setWinnerId={setMinigameWinnerId}
+          noPenalty={minigameNoPenalty}
+          setNoPenalty={setMinigameNoPenalty}
         />
       )}
 
@@ -1312,70 +1476,6 @@ function TileActionModal({
           <span>Use {selectedPlayer.name}'s Shield if this assignment allows it</span>
         </label>
       )}
-
-      <details
-        className="host-controls"
-        open={hostOpen}
-        onToggle={(event) => setHostOpen(event.currentTarget.open)}
-      >
-        <summary>Host controls</summary>
-        <div className="host-grid">
-          <button
-            className="secondary-button"
-            type="button"
-            onClick={() =>
-              setGame((state) => (state ? applyManualAdjustment(state, targetId, 1, 0) : state))
-            }
-          >
-            <Icons.Plus aria-hidden="true" />
-            +1 {drinkWord(1, settings.alcoholFreeMode)}
-          </button>
-          <button
-            className="secondary-button"
-            type="button"
-            onClick={() =>
-              setGame((state) => (state ? applyManualAdjustment(state, targetId, -1, 0) : state))
-            }
-          >
-            <Icons.Minus aria-hidden="true" />
-            -1 {drinkWord(1, settings.alcoholFreeMode)}
-          </button>
-          <button
-            className="secondary-button"
-            type="button"
-            onClick={() =>
-              setGame((state) => (state ? applyManualAdjustment(state, targetId, 0, 1) : state))
-            }
-          >
-            <Icons.Plus aria-hidden="true" />
-            +1 {shotWord(1, settings.alcoholFreeMode)}
-          </button>
-          <button
-            className="secondary-button"
-            type="button"
-            onClick={() => setMinigameNonce(createId('mini'))}
-          >
-            <Icons.RotateCcw aria-hidden="true" />
-            Replay Minigame
-          </button>
-          <button
-            className="secondary-button"
-            type="button"
-            onClick={() => setGame((state) => (state ? restartTurn(state) : state))}
-          >
-            <Icons.Rewind aria-hidden="true" />
-            Restart Turn
-          </button>
-          <button
-            className="secondary-button"
-            type="button"
-            onClick={() => setSettings({ ...settings })}
-          >
-            <Icons.Save aria-hidden="true" />
-            Save Settings
-          </button>
-        </div>
-      </details>
 
       <div className="modal-actions">
         <button
@@ -1455,6 +1555,8 @@ function MinigamePanel({
   winnerId,
   setLoserId,
   setWinnerId,
+  noPenalty,
+  setNoPenalty,
 }: {
   id: MinigameId;
   game: GameState;
@@ -1463,15 +1565,16 @@ function MinigamePanel({
   winnerId?: string;
   setLoserId: (id: string | undefined) => void;
   setWinnerId: (id: string | undefined) => void;
+  noPenalty: boolean;
+  setNoPenalty: (value: boolean) => void;
 }) {
   const players = getEligibleTargets(game, true);
   const current = getCurrentPlayer(game);
   const [touches, setTouches] = useState<Map<number, string>>(new Map());
   const [numberTarget] = useState(() => randomSource.integer(1, 20));
   const [guess, setGuess] = useState('');
-  const [guessMessage, setGuessMessage] = useState(
-    'Three guesses. Host decides the final outcome.',
-  );
+  const [guessAttempts, setGuessAttempts] = useState(0);
+  const [guessMessage, setGuessMessage] = useState('Three guesses. Correct clears the penalty.');
   const [prompt] = useState(() => randomSource.pick(CATEGORY_PROMPTS));
   const [trivia] = useState(() => randomSource.pick(TRIVIA_QUESTIONS));
   const [sorting] = useState(() => randomSource.pick(SORTING_PUZZLES));
@@ -1480,7 +1583,19 @@ function MinigamePanel({
   const selectedWinner = winnerId ?? current.id;
 
   const pickRandomLoser = () => {
+    setNoPenalty(false);
     setLoserId(randomSource.pick(players).id);
+  };
+
+  const markLoser = (id: string | undefined) => {
+    setNoPenalty(false);
+    setLoserId(id);
+  };
+
+  const markNoPenalty = (winner: string | undefined = current.id) => {
+    setWinnerId(winner);
+    setLoserId(undefined);
+    setNoPenalty(true);
   };
 
   const submitGuess = () => {
@@ -1490,11 +1605,18 @@ function MinigamePanel({
       return;
     }
     if (value === numberTarget) {
-      setGuessMessage('Correct. Mark a winner or skip the penalty.');
-      setWinnerId(current.id);
+      setGuessMessage('Correct. No penalty is selected.');
+      markNoPenalty(current.id);
       return;
     }
-    setGuessMessage(value < numberTarget ? 'Higher.' : 'Lower.');
+    const nextAttempt = guessAttempts + 1;
+    setGuessAttempts(nextAttempt);
+    if (nextAttempt >= 3) {
+      setGuessMessage(`Missed. The number was ${numberTarget}.`);
+      markLoser(current.id);
+      return;
+    }
+    setGuessMessage(`${value < numberTarget ? 'Higher' : 'Lower'}. Guess ${nextAttempt + 1} of 3.`);
   };
 
   return (
@@ -1508,6 +1630,9 @@ function MinigamePanel({
         <div
           className="touch-pad"
           onPointerDown={(event) => {
+            if (event.target instanceof HTMLElement && event.target.closest('button')) {
+              return;
+            }
             event.currentTarget.setPointerCapture(event.pointerId);
             setTouches((currentTouches) =>
               new Map(currentTouches).set(event.pointerId, `Touch ${currentTouches.size + 1}`),
@@ -1542,13 +1667,19 @@ function MinigamePanel({
         </p>
       )}
       {id === 'dice-duel' && (
-        <p>Choose an opponent. Each rolls once; lower result is marked below.</p>
+        <DiceDuelMini
+          current={current}
+          players={players}
+          setLoserId={markLoser}
+          setWinnerId={setWinnerId}
+        />
       )}
-      {id === 'reaction-tap' && <ReactionTapMini setLoserId={setLoserId} players={players} />}
+      {id === 'reaction-tap' && (
+        <ReactionTapMini setLoserId={markLoser} setWinnerId={setWinnerId} players={players} />
+      )}
       {id === 'memory-chain' && (
         <p>
-          Build a chain from the category <strong>{prompt}</strong>. Use the host buttons for
-          correct, miss, or skip.
+          Build a chain from the category <strong>{prompt}</strong>. Mark the first miss below.
         </p>
       )}
       {id === 'number-guess' && (
@@ -1571,9 +1702,15 @@ function MinigamePanel({
           <p>Answer: {trivia.answer}</p>
         </details>
       )}
-      {id === 'exact-timer' && <TimerMini />}
-      {id === 'sequence-tap' && <SequenceMini />}
-      {id === 'hold-button' && <HoldButtonMini />}
+      {id === 'exact-timer' && (
+        <TimerMini current={current} setLoserId={markLoser} markNoPenalty={markNoPenalty} />
+      )}
+      {id === 'sequence-tap' && (
+        <SequenceMini current={current} setLoserId={markLoser} markNoPenalty={markNoPenalty} />
+      )}
+      {id === 'hold-button' && (
+        <HoldButtonMini current={current} setLoserId={markLoser} markNoPenalty={markNoPenalty} />
+      )}
       {id === 'sorting-sprint' && (
         <p>
           {sorting.prompt} {compactList(sorting.items)}
@@ -1598,43 +1735,179 @@ function MinigamePanel({
           label={`Receives ${drinkWord(1, settings.alcoholFreeMode)}`}
           players={players}
           value={selectedLoser}
-          onChange={setLoserId}
+          onChange={markLoser}
         />
       </div>
+      <label className="checkbox-line">
+        <input
+          type="checkbox"
+          checked={noPenalty}
+          onChange={(event) => {
+            setNoPenalty(event.target.checked);
+            if (event.target.checked) {
+              setLoserId(undefined);
+            }
+          }}
+        />
+        <span>No penalty for this mini-game</span>
+      </label>
     </section>
+  );
+}
+
+function DiceDuelMini({
+  current,
+  players,
+  setLoserId,
+  setWinnerId,
+}: {
+  current: Player;
+  players: Player[];
+  setLoserId: (id: string | undefined) => void;
+  setWinnerId: (id: string | undefined) => void;
+}) {
+  const opponents = players.filter((player) => player.id !== current.id);
+  const [opponentId, setOpponentId] = useState(opponents[0]?.id ?? current.id);
+  const [result, setResult] = useState('Choose an opponent, then roll both dice.');
+
+  const rollDuel = () => {
+    const opponent = players.find((player) => player.id === opponentId) ?? opponents[0];
+    if (!opponent) {
+      setResult('No opponent is available.');
+      return;
+    }
+    const currentRoll = randomSource.integer(1, 6);
+    const opponentRoll = randomSource.integer(1, 6);
+    if (currentRoll === opponentRoll) {
+      setResult(
+        `${current.name} ${currentRoll} · ${opponent.name} ${opponentRoll}. Tie, roll again.`,
+      );
+      return;
+    }
+    const loser = currentRoll < opponentRoll ? current : opponent;
+    const winner = currentRoll > opponentRoll ? current : opponent;
+    setLoserId(loser.id);
+    setWinnerId(winner.id);
+    setResult(
+      `${current.name} ${currentRoll} · ${opponent.name} ${opponentRoll}. ${loser.name} loses.`,
+    );
+  };
+
+  return (
+    <div className="mini-card">
+      <PlayerSelect
+        label="Opponent"
+        players={opponents.length > 0 ? opponents : players}
+        value={opponentId}
+        onChange={setOpponentId}
+      />
+      <button className="secondary-button" type="button" onClick={rollDuel}>
+        <Icons.Dices aria-hidden="true" />
+        Roll Duel
+      </button>
+      <span>{result}</span>
+    </div>
   );
 }
 
 function ReactionTapMini({
   players,
   setLoserId,
+  setWinnerId,
 }: {
   players: Player[];
-  setLoserId: (id: string) => void;
+  setLoserId: (id: string | undefined) => void;
+  setWinnerId: (id: string | undefined) => void;
 }) {
-  const [state, setState] = useState<'idle' | 'waiting' | 'tap'>('idle');
+  const [state, setState] = useState<'idle' | 'waiting' | 'tap' | 'done'>('idle');
   const [message, setMessage] = useState(
     'Start the round, then tap only when the screen turns yellow.',
   );
+  const [startedAt, setStartedAt] = useState<number | null>(null);
+  const [tapTimes, setTapTimes] = useState<Record<string, number>>({});
+  const timeoutRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (timeoutRef.current) {
+        window.clearTimeout(timeoutRef.current);
+      }
+    };
+  }, []);
 
   const start = () => {
+    if (timeoutRef.current) {
+      window.clearTimeout(timeoutRef.current);
+    }
     setState('waiting');
+    setTapTimes({});
+    setStartedAt(null);
     setMessage('Wait for yellow...');
-    window.setTimeout(
+    timeoutRef.current = window.setTimeout(
       () => {
         setState('tap');
+        setStartedAt(performance.now());
         setMessage('TAP');
       },
       randomSource.integer(900, 2400),
     );
   };
 
+  const registerTap = (player: Player) => {
+    if (state === 'waiting') {
+      if (timeoutRef.current) {
+        window.clearTimeout(timeoutRef.current);
+      }
+      setState('done');
+      setLoserId(player.id);
+      setMessage(`${player.name} tapped early.`);
+      return;
+    }
+    if (state !== 'tap' || !startedAt || tapTimes[player.id] !== undefined) {
+      return;
+    }
+
+    const elapsed = performance.now() - startedAt;
+    const nextTimes = { ...tapTimes, [player.id]: elapsed };
+    setTapTimes(nextTimes);
+
+    const entries = Object.entries(nextTimes);
+    if (entries.length >= players.length) {
+      const sorted = entries.sort((a, b) => a[1] - b[1]);
+      const winner = players.find((entry) => entry.id === sorted[0][0]);
+      const loser = players.find((entry) => entry.id === sorted[sorted.length - 1][0]);
+      setWinnerId(winner?.id);
+      setLoserId(loser?.id);
+      setState('done');
+      setMessage(`${winner?.name ?? 'Fastest'} fastest · ${loser?.name ?? 'Slowest'} slowest.`);
+      return;
+    }
+
+    setMessage(`${player.name} locked in. ${players.length - entries.length} to go.`);
+  };
+
   return (
     <div className={`reaction-zone ${state}`}>
       <strong>{message}</strong>
+      <div className="reaction-player-grid">
+        {players.map((player) => (
+          <button
+            key={player.id}
+            className={
+              tapTimes[player.id] !== undefined ? 'reaction-player tapped' : 'reaction-player'
+            }
+            type="button"
+            style={{ '--counter-colour': player.colour } as CSSProperties}
+            disabled={state === 'idle' || state === 'done'}
+            onClick={() => registerTap(player)}
+          >
+            {player.name}
+          </button>
+        ))}
+      </div>
       <div className="button-row">
         <button className="secondary-button" type="button" onClick={start}>
-          Start
+          {state === 'idle' ? 'Start' : 'Restart'}
         </button>
         <button
           className="secondary-button"
@@ -1648,10 +1921,20 @@ function ReactionTapMini({
   );
 }
 
-function TimerMini() {
+function TimerMini({
+  current,
+  setLoserId,
+  markNoPenalty,
+}: {
+  current: Player;
+  setLoserId: (id: string | undefined) => void;
+  markNoPenalty: (winner?: string | undefined) => void;
+}) {
   const [running, setRunning] = useState(false);
   const [startedAt, setStartedAt] = useState<number | null>(null);
   const [result, setResult] = useState('Target is 7.00 seconds.');
+  const targetSeconds = 7;
+  const tolerance = 0.45;
   return (
     <div className="button-row">
       <button
@@ -1671,8 +1954,15 @@ function TimerMini() {
         disabled={!running || !startedAt}
         onClick={() => {
           const elapsed = startedAt ? (performance.now() - startedAt) / 1000 : 0;
+          const difference = Math.abs(elapsed - targetSeconds);
           setRunning(false);
-          setResult(`${elapsed.toFixed(2)} seconds`);
+          if (difference <= tolerance) {
+            markNoPenalty(current.id);
+            setResult(`${elapsed.toFixed(2)} seconds. Cleared.`);
+            return;
+          }
+          setLoserId(current.id);
+          setResult(`${elapsed.toFixed(2)} seconds. ${current.name} missed.`);
         }}
       >
         Stop
@@ -1682,26 +1972,84 @@ function TimerMini() {
   );
 }
 
-function SequenceMini() {
+function SequenceMini({
+  current,
+  setLoserId,
+  markNoPenalty,
+}: {
+  current: Player;
+  setLoserId: (id: string | undefined) => void;
+  markNoPenalty: (winner?: string | undefined) => void;
+}) {
   const sequence = useMemo(
     () => ['yellow', 'white', 'red', 'cyan'].slice(0, randomSource.integer(3, 4)),
     [],
   );
+  const [cursor, setCursor] = useState(0);
+  const [locked, setLocked] = useState(false);
+  const [message, setMessage] = useState('Tap the colours in order.');
+  const colours = ['yellow', 'white', 'red', 'cyan'];
+  const tapColour = (colour: string) => {
+    if (locked) {
+      return;
+    }
+    if (colour !== sequence[cursor]) {
+      setLocked(true);
+      setLoserId(current.id);
+      setMessage(`${current.name} missed the sequence.`);
+      return;
+    }
+    if (cursor + 1 >= sequence.length) {
+      setLocked(true);
+      markNoPenalty(current.id);
+      setMessage('Sequence cleared.');
+      return;
+    }
+    setCursor((value) => value + 1);
+    setMessage(`Good. ${sequence.length - cursor - 1} left.`);
+  };
+
   return (
-    <div className="sequence-row">
-      {sequence.map((colour, index) => (
-        <span key={`${colour}-${index}`} className={`sequence-dot ${colour}`}>
-          {index + 1}
-        </span>
-      ))}
+    <div className="mini-card">
+      <div className="sequence-row" aria-label="Target sequence">
+        {sequence.map((colour, index) => (
+          <span key={`${colour}-${index}`} className={`sequence-dot ${colour}`}>
+            {index + 1}
+          </span>
+        ))}
+      </div>
+      <div className="sequence-row" aria-label="Sequence controls">
+        {colours.map((colour) => (
+          <button
+            key={colour}
+            className={`sequence-dot ${colour}`}
+            type="button"
+            disabled={locked}
+            onClick={() => tapColour(colour)}
+          >
+            {colour.slice(0, 1).toUpperCase()}
+          </button>
+        ))}
+      </div>
+      <span>{message}</span>
     </div>
   );
 }
 
-function HoldButtonMini() {
+function HoldButtonMini({
+  current,
+  setLoserId,
+  markNoPenalty,
+}: {
+  current: Player;
+  setLoserId: (id: string | undefined) => void;
+  markNoPenalty: (winner?: string | undefined) => void;
+}) {
   const [holding, setHolding] = useState(false);
   const [startedAt, setStartedAt] = useState<number | null>(null);
   const [label, setLabel] = useState('Hold, then release near 3 seconds.');
+  const targetSeconds = 3;
+  const tolerance = 0.35;
   return (
     <button
       className={`hold-button ${holding ? 'holding' : ''}`}
@@ -1713,8 +2061,19 @@ function HoldButtonMini() {
       }}
       onPointerUp={() => {
         const elapsed = startedAt ? (performance.now() - startedAt) / 1000 : 0;
+        const difference = Math.abs(elapsed - targetSeconds);
         setHolding(false);
-        setLabel(`${elapsed.toFixed(2)} seconds`);
+        if (difference <= tolerance) {
+          markNoPenalty(current.id);
+          setLabel(`${elapsed.toFixed(2)} seconds. Cleared.`);
+          return;
+        }
+        setLoserId(current.id);
+        setLabel(`${elapsed.toFixed(2)} seconds. Missed.`);
+      }}
+      onPointerCancel={() => {
+        setHolding(false);
+        setLabel('Hold cancelled.');
       }}
     >
       {label}
