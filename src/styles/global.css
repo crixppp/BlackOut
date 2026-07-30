@@ -107,12 +107,6 @@ summary:focus-visible {
   object-fit: cover;
 }
 
-.top-bar__brand span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .top-bar__actions,
 .status-actions,
 .button-row,
@@ -220,6 +214,11 @@ summary:focus-visible {
   max-width: 100%;
   height: auto;
   filter: drop-shadow(0 20px 24px rgba(0, 0, 0, 0.48));
+}
+
+.logo-stage img {
+  transform-origin: center;
+  animation: logoBreathe 4.8s ease-in-out infinite;
 }
 
 .home-actions,
@@ -899,6 +898,33 @@ select {
   line-height: 1.45;
 }
 
+.reveal-modal {
+  width: min(560px, 100%);
+  animation: revealCardIn 420ms cubic-bezier(0.19, 1, 0.22, 1);
+}
+
+.challenge-reveal-card {
+  display: grid;
+  gap: 0.55rem;
+  padding: 1rem;
+  border: 2px solid rgba(255, 212, 0, 0.38);
+  border-radius: 8px;
+  background: rgba(255, 212, 0, 0.08);
+}
+
+.challenge-reveal-card span {
+  color: var(--colour-yellow);
+  font-size: 0.76rem;
+  font-weight: 950;
+  text-transform: uppercase;
+}
+
+.challenge-reveal-card p {
+  margin: 0;
+  font-size: 1.08rem;
+  line-height: 1.45;
+}
+
 .select-control {
   text-align: left;
 }
@@ -978,6 +1004,105 @@ select {
   border: 2px solid rgba(255, 255, 255, 0.12);
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.06);
+}
+
+.colour-rush-card > strong {
+  display: grid;
+  place-items: center;
+  min-height: 86px;
+  border: 3px solid #000000;
+  border-radius: 8px;
+  background: #ffffff;
+  font-size: clamp(2.2rem, 10vw, 4.2rem);
+  line-height: 0.95;
+  text-transform: uppercase;
+}
+
+.colour-choice-grid,
+.wire-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 0.55rem;
+}
+
+.colour-choice,
+.wire-button {
+  min-height: 54px;
+  border: 3px solid #000000;
+  border-radius: 8px;
+  color: #080808;
+  background: var(--choice-colour);
+  font-weight: 950;
+  text-transform: uppercase;
+}
+
+.blackjack-hands,
+.bomb-status,
+.bomb-task {
+  display: grid;
+  gap: 0.45rem;
+  padding: 0.75rem;
+  border: 2px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.28);
+}
+
+.blackjack-hands strong,
+.bomb-status strong {
+  color: var(--colour-yellow);
+}
+
+.lock-card {
+  justify-items: center;
+}
+
+.lock-face {
+  position: relative;
+  width: 154px;
+  height: 154px;
+  border: 6px solid #000000;
+  border-radius: 50%;
+  background: conic-gradient(
+    var(--colour-yellow) 0 38deg,
+    #202020 38deg 320deg,
+    var(--colour-yellow) 320deg 360deg
+  );
+  box-shadow: inset 0 0 0 16px rgba(255, 255, 255, 0.08);
+}
+
+.lock-face::after {
+  content: '';
+  position: absolute;
+  inset: 42px;
+  border: 4px solid #000000;
+  border-radius: 50%;
+  background: #ffffff;
+}
+
+.lock-marker {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  z-index: 1;
+  width: 6px;
+  height: 66px;
+  border-radius: 999px;
+  background: #ff7b7f;
+  transform: translateX(-50%) rotate(0deg);
+  transform-origin: 50% 0;
+}
+
+.lock-face.running .lock-marker {
+  animation: lockSpin 1500ms linear infinite;
+}
+
+.lock-success-zone {
+  position: absolute;
+  inset: -6px;
+  border: 6px solid var(--colour-yellow);
+  border-radius: 50%;
+  clip-path: polygon(50% 50%, 100% 0, 100% 100%);
+  opacity: 0.48;
 }
 
 .touch-pad,
@@ -1168,6 +1293,27 @@ select {
   }
 }
 
+@keyframes logoBreathe {
+  0%,
+  100% {
+    transform: translateY(0) scale(1);
+  }
+  50% {
+    transform: translateY(-10px) scale(1.055);
+  }
+}
+
+@keyframes revealCardIn {
+  from {
+    opacity: 0;
+    transform: translateY(18px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
 @keyframes tilePulse {
   from {
     box-shadow: 0 0 0 0 rgba(255, 212, 0, 0.3);
@@ -1189,11 +1335,16 @@ select {
   }
 }
 
-@media (max-width: 720px) {
-  .top-bar__brand span {
-    display: none;
+@keyframes lockSpin {
+  from {
+    transform: translateX(-50%) rotate(0deg);
   }
+  to {
+    transform: translateX(-50%) rotate(360deg);
+  }
+}
 
+@media (max-width: 720px) {
   .setup-header,
   .player-editor {
     grid-template-columns: 1fr;

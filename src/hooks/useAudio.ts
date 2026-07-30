@@ -16,6 +16,8 @@ export function useAudio(
   updateSettings: (settings: GameSettings) => void,
 ): UseAudioResult {
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const shouldPlayRef = useRef(false);
+  const volumeRef = useRef(settings.musicVolume);
   const [playing, setPlaying] = useState(false);
   const [available, setAvailable] = useState(AUDIO_TRACKS.length > 0);
   const random = useMemo(() => new CryptoRandomSource(), []);
@@ -24,26 +26,54 @@ export function useAudio(
   useEffect(() => {
     const audio = new Audio(AUDIO_TRACKS[trackIndex]?.src);
     audio.loop = false;
-    audio.preload = 'none';
-    audio.volume = settings.musicVolume;
+    audio.preload = 'auto';
+    audio.volume = volumeRef.current;
     audioRef.current = audio;
 
-    const onEnded = () => setTrackIndex((index) => (index + 1) % AUDIO_TRACKS.length);
+    const playCurrent = () => {
+      audio
+        .play()
+        .then(() => setPlaying(true))
+        .catch(() => {
+          shouldPlayRef.current = false;
+          setPlaying(false);
+          setAvailable(false);
+        });
+    };
+
+    const onEnded = () => {
+      if (AUDIO_TRACKS.length <= 1) {
+        audio.currentTime = 0;
+        playCurrent();
+        return;
+      }
+      setTrackIndex((index) => (index + 1) % AUDIO_TRACKS.length);
+    };
     const onError = () => {
-      setAvailable(false);
+      if (shouldPlayRef.current && AUDIO_TRACKS.length > 1) {
+        setTrackIndex((index) => (index + 1) % AUDIO_TRACKS.length);
+        return;
+      }
+      shouldPlayRef.current = false;
+      setAvailable(AUDIO_TRACKS.length > 0);
       setPlaying(false);
     };
     audio.addEventListener('ended', onEnded);
     audio.addEventListener('error', onError);
+
+    if (shouldPlayRef.current && settings.backgroundMusic) {
+      playCurrent();
+    }
 
     return () => {
       audio.pause();
       audio.removeEventListener('ended', onEnded);
       audio.removeEventListener('error', onError);
     };
-  }, [settings.musicVolume, trackIndex]);
+  }, [settings.backgroundMusic, trackIndex]);
 
   useEffect(() => {
+    volumeRef.current = settings.musicVolume;
     if (audioRef.current) {
       audioRef.current.volume = settings.musicVolume;
     }
@@ -51,6 +81,7 @@ export function useAudio(
 
   useEffect(() => {
     if (!settings.backgroundMusic && audioRef.current) {
+      shouldPlayRef.current = false;
       audioRef.current.pause();
       setPlaying(false);
     }
@@ -59,20 +90,24 @@ export function useAudio(
   const toggle = useCallback(() => {
     const audio = audioRef.current;
     if (!audio || !settings.backgroundMusic) {
+      shouldPlayRef.current = true;
       updateSettings({ ...settings, backgroundMusic: true });
       return;
     }
 
     if (playing) {
+      shouldPlayRef.current = false;
       audio.pause();
       setPlaying(false);
       return;
     }
 
+    shouldPlayRef.current = true;
     audio
       .play()
       .then(() => setPlaying(true))
       .catch(() => {
+        shouldPlayRef.current = false;
         setPlaying(false);
         setAvailable(false);
       });

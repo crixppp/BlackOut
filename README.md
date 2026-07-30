@@ -1,6 +1,6 @@
 # Black Out!
 
-Black Out! is a mobile-first, pass-and-play party board game built as an installable static web app. Players share one device, roll a virtual die, move across a 60-space interactive board, resolve tile actions and minigames, and keep game-score totals for drinks and shots. Alcohol-free mode converts the scoring copy to points and penalties.
+Black Out! is a mobile-first, pass-and-play party board game built as an installable static web app. Players share one device, roll a virtual die, move across a 60-space interactive board, resolve tile actions and minigames, and keep game-score totals for sips and shots. Alcohol-free mode converts the scoring copy to points and penalties.
 
 ## Features
 

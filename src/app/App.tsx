@@ -464,7 +464,6 @@ function Header({
       </button>
       <div className="top-bar__brand">
         <img src="./assets/branding/blackout-logo.png" alt="Black Out!" />
-        <span>Black Out!</span>
       </div>
       <div className="top-bar__actions">
         {screen === 'game' && game && <span className="turn-pill">Turn {game.turnNumber}</span>}
@@ -583,7 +582,8 @@ function HowToPlay({ onBack }: { onBack: () => void }) {
           The first player to reach Finish wins, and the game continues until everyone finishes.
         </p>
         <p>
-          Assigned drinks are game scores only. They are not health, safety, or BAC measurements.
+          Assigned sips and shots are game prompts only. They are not health, safety, or BAC
+          measurements.
         </p>
       </div>
       <button className="primary-button" type="button" onClick={onBack}>
@@ -858,7 +858,7 @@ const difficultyOptions: Array<{
   {
     value: 'blackout',
     label: 'Black Out',
-    description: 'Late-game drink tiles hit harder.',
+    description: 'Late-game sip and shot tiles hit harder.',
   },
 ];
 
@@ -1357,6 +1357,8 @@ function TileActionModal({
   const [minigameLoserId, setMinigameLoserId] = useState<string | undefined>();
   const [minigameWinnerId, setMinigameWinnerId] = useState<string | undefined>();
   const [minigameNoPenalty, setMinigameNoPenalty] = useState(false);
+  const [revealReady, setRevealReady] = useState(settings.reducedMotion);
+  const [challengeStarted, setChallengeStarted] = useState(false);
   const actionSubmittedRef = useRef(false);
   const targetIncludesCurrent =
     !tile || (tile.actionType !== 'choice' && tile.actionType !== 'buddy')
@@ -1373,6 +1375,16 @@ function TileActionModal({
       setTargetId(targets[0].id);
     }
   }, [targetId, targets]);
+
+  useEffect(() => {
+    setChallengeStarted(false);
+    setRevealReady(settings.reducedMotion);
+    if (settings.reducedMotion) {
+      return;
+    }
+    const timeout = window.setTimeout(() => setRevealReady(true), 700);
+    return () => window.clearTimeout(timeout);
+  }, [resolution?.startedAtTurn, resolution?.tileId, settings.reducedMotion]);
 
   if (!tile) {
     return null;
@@ -1408,6 +1420,46 @@ function TileActionModal({
   const submitResult = (extra: TileChoice = {}) => {
     resolve(extra);
   };
+
+  if (!revealReady) {
+    return null;
+  }
+
+  if (!challengeStarted) {
+    return (
+      <Modal title={display.title} className="tile-modal reveal-modal">
+        <div className={`tile-banner variant-${tile.backgroundVariant}`}>
+          <Icon name={tile.icon} />
+          <div>
+            <p className="eyebrow">Space {tile.id}</p>
+            <h2>{display.title}</h2>
+          </div>
+        </div>
+        <div className="challenge-reveal-card">
+          <span>{tile.actionType === 'minigame' ? 'Challenge' : 'Tile'}</span>
+          <p>{display.description}</p>
+        </div>
+        <div className="modal-actions">
+          <button
+            className="secondary-button"
+            type="button"
+            onClick={() => submitResult({ skip: true })}
+          >
+            <Icons.SkipForward aria-hidden="true" />
+            Skip
+          </button>
+          <button
+            className="primary-button"
+            type="button"
+            onClick={() => setChallengeStarted(true)}
+          >
+            <Icons.Play aria-hidden="true" />
+            Start Challenge
+          </button>
+        </div>
+      </Modal>
+    );
+  }
 
   return (
     <Modal title={display.title} className="tile-modal">
@@ -1677,6 +1729,21 @@ function MinigamePanel({
       {id === 'reaction-tap' && (
         <ReactionTapMini setLoserId={markLoser} setWinnerId={setWinnerId} players={players} />
       )}
+      {id === 'colour-rush' && (
+        <ColourRushMini current={current} setLoserId={markLoser} markNoPenalty={markNoPenalty} />
+      )}
+      {id === 'blackjack' && (
+        <BlackjackMini current={current} setLoserId={markLoser} markNoPenalty={markNoPenalty} />
+      )}
+      {id === 'wire-cutter' && (
+        <WireCutterMini current={current} setLoserId={markLoser} markNoPenalty={markNoPenalty} />
+      )}
+      {id === 'lock-picker' && (
+        <LockPickerMini current={current} setLoserId={markLoser} markNoPenalty={markNoPenalty} />
+      )}
+      {id === 'bomb-defuse' && (
+        <BombDefuseMini current={current} setLoserId={markLoser} markNoPenalty={markNoPenalty} />
+      )}
       {id === 'memory-chain' && (
         <p>
           Build a chain from the category <strong>{prompt}</strong>. Mark the first miss below.
@@ -1921,6 +1988,415 @@ function ReactionTapMini({
   );
 }
 
+const rushColours = [
+  { id: 'red', label: 'Red', value: '#ff7b7f' },
+  { id: 'yellow', label: 'Yellow', value: '#ffd400' },
+  { id: 'cyan', label: 'Cyan', value: '#2ee6d6' },
+  { id: 'green', label: 'Green', value: '#a6f4b8' },
+] as const;
+
+function ColourRushMini({
+  current,
+  setLoserId,
+  markNoPenalty,
+}: {
+  current: Player;
+  setLoserId: (id: string | undefined) => void;
+  markNoPenalty: (winner?: string | undefined) => void;
+}) {
+  const [word] = useState(() => randomSource.pick(rushColours));
+  const [ink] = useState(() => {
+    const options = rushColours.filter((colour) => colour.id !== word.id);
+    return randomSource.pick(options);
+  });
+  const [message, setMessage] = useState('Tap the colour of the text, not the word.');
+  const [locked, setLocked] = useState(false);
+
+  const choose = (colourId: string) => {
+    if (locked) {
+      return;
+    }
+    setLocked(true);
+    if (colourId === ink.id) {
+      markNoPenalty(current.id);
+      setMessage('Correct. Penalty cleared.');
+      return;
+    }
+    setLoserId(current.id);
+    setMessage(`${current.name} picked the word instead of the colour.`);
+  };
+
+  return (
+    <div className="mini-card colour-rush-card">
+      <strong style={{ color: ink.value }}>{word.label}</strong>
+      <div className="colour-choice-grid">
+        {rushColours.map((colour) => (
+          <button
+            key={colour.id}
+            className="colour-choice"
+            type="button"
+            disabled={locked}
+            style={{ '--choice-colour': colour.value } as CSSProperties}
+            onClick={() => choose(colour.id)}
+          >
+            {colour.label}
+          </button>
+        ))}
+      </div>
+      <span>{message}</span>
+    </div>
+  );
+}
+
+function drawBlackjackCard(): number {
+  const raw = randomSource.integer(1, 13);
+  return raw > 10 ? 10 : raw;
+}
+
+function blackjackTotal(cards: number[]): number {
+  let total = cards.reduce((sum, card) => sum + (card === 1 ? 11 : card), 0);
+  let aces = cards.filter((card) => card === 1).length;
+  while (total > 21 && aces > 0) {
+    total -= 10;
+    aces -= 1;
+  }
+  return total;
+}
+
+function BlackjackMini({
+  current,
+  setLoserId,
+  markNoPenalty,
+}: {
+  current: Player;
+  setLoserId: (id: string | undefined) => void;
+  markNoPenalty: (winner?: string | undefined) => void;
+}) {
+  const [playerCards, setPlayerCards] = useState(() => [drawBlackjackCard(), drawBlackjackCard()]);
+  const [dealerCards, setDealerCards] = useState(() => [drawBlackjackCard(), drawBlackjackCard()]);
+  const [message, setMessage] = useState('Hit or stand. Beat the dealer without busting.');
+  const [locked, setLocked] = useState(false);
+  const playerTotal = blackjackTotal(playerCards);
+  const dealerTotal = blackjackTotal(dealerCards);
+
+  const lose = (text: string) => {
+    setLocked(true);
+    setLoserId(current.id);
+    setMessage(text);
+  };
+
+  const win = (text: string) => {
+    setLocked(true);
+    markNoPenalty(current.id);
+    setMessage(text);
+  };
+
+  const hit = () => {
+    const nextCards = [...playerCards, drawBlackjackCard()];
+    setPlayerCards(nextCards);
+    const nextTotal = blackjackTotal(nextCards);
+    if (nextTotal > 21) {
+      lose(`${current.name} busted at ${nextTotal}.`);
+    }
+  };
+
+  const stand = () => {
+    const nextDealerCards = [...dealerCards];
+    while (blackjackTotal(nextDealerCards) < 17) {
+      nextDealerCards.push(drawBlackjackCard());
+    }
+    setDealerCards(nextDealerCards);
+    const finalDealer = blackjackTotal(nextDealerCards);
+    if (finalDealer > 21 || playerTotal > finalDealer) {
+      win(`${current.name} ${playerTotal} beats dealer ${finalDealer}.`);
+      return;
+    }
+    if (playerTotal === finalDealer) {
+      win(`Push at ${playerTotal}. No penalty.`);
+      return;
+    }
+    lose(`Dealer ${finalDealer} beats ${current.name} ${playerTotal}.`);
+  };
+
+  return (
+    <div className="mini-card blackjack-card">
+      <div className="blackjack-hands">
+        <span>
+          {current.name}: {playerCards.join(' + ')} = <strong>{playerTotal}</strong>
+        </span>
+        <span>
+          Dealer: {dealerCards.join(' + ')} = <strong>{dealerTotal}</strong>
+        </span>
+      </div>
+      <div className="button-row">
+        <button className="secondary-button" type="button" disabled={locked} onClick={hit}>
+          Hit
+        </button>
+        <button className="secondary-button" type="button" disabled={locked} onClick={stand}>
+          Stand
+        </button>
+      </div>
+      <span>{message}</span>
+    </div>
+  );
+}
+
+function WireCutterMini({
+  current,
+  setLoserId,
+  markNoPenalty,
+}: {
+  current: Player;
+  setLoserId: (id: string | undefined) => void;
+  markNoPenalty: (winner?: string | undefined) => void;
+}) {
+  const [correctWire] = useState(() => randomSource.pick(rushColours));
+  const [armed, setArmed] = useState(false);
+  const [done, setDone] = useState(false);
+  const [message, setMessage] = useState('Start the countdown, then cut the wire from the clue.');
+
+  useEffect(() => {
+    if (!armed || done) {
+      return;
+    }
+    const timeout = window.setTimeout(() => {
+      setDone(true);
+      setLoserId(current.id);
+      setMessage('Time ran out.');
+    }, 8000);
+    return () => window.clearTimeout(timeout);
+  }, [armed, current.id, done, setLoserId]);
+
+  const cut = (wireId: string) => {
+    if (!armed || done) {
+      return;
+    }
+    setDone(true);
+    if (wireId === correctWire.id) {
+      markNoPenalty(current.id);
+      setMessage('Correct wire cut.');
+      return;
+    }
+    setLoserId(current.id);
+    setMessage('Wrong wire.');
+  };
+
+  return (
+    <div className="mini-card wire-card">
+      <strong>Clue: cut the {correctWire.label.toLowerCase()} wire.</strong>
+      <div className="wire-grid">
+        {rushColours.map((wire) => (
+          <button
+            key={wire.id}
+            className="wire-button"
+            type="button"
+            disabled={!armed || done}
+            style={{ '--choice-colour': wire.value } as CSSProperties}
+            onClick={() => cut(wire.id)}
+          >
+            {wire.label}
+          </button>
+        ))}
+      </div>
+      <div className="button-row">
+        <button
+          className="secondary-button"
+          type="button"
+          disabled={armed && !done}
+          onClick={() => {
+            setArmed(true);
+            setDone(false);
+            setMessage('Countdown running.');
+          }}
+        >
+          Start Countdown
+        </button>
+        <span>{message}</span>
+      </div>
+    </div>
+  );
+}
+
+function LockPickerMini({
+  current,
+  setLoserId,
+  markNoPenalty,
+}: {
+  current: Player;
+  setLoserId: (id: string | undefined) => void;
+  markNoPenalty: (winner?: string | undefined) => void;
+}) {
+  const [running, setRunning] = useState(false);
+  const [startedAt, setStartedAt] = useState<number | null>(null);
+  const [message, setMessage] = useState('Start the lock, then stop the marker in the gold zone.');
+  const [locked, setLocked] = useState(false);
+  const cycleMs = 1500;
+
+  const stop = () => {
+    if (!running || !startedAt || locked) {
+      return;
+    }
+    const elapsed = performance.now() - startedAt;
+    const angle = ((elapsed % cycleMs) / cycleMs) * 360;
+    const hit = angle >= 320 || angle <= 38;
+    setRunning(false);
+    setLocked(true);
+    if (hit) {
+      markNoPenalty(current.id);
+      setMessage(`Unlocked at ${Math.round(angle)} degrees.`);
+      return;
+    }
+    setLoserId(current.id);
+    setMessage(`Missed at ${Math.round(angle)} degrees.`);
+  };
+
+  return (
+    <div className="mini-card lock-card">
+      <div className={`lock-face ${running ? 'running' : ''}`} aria-label="Lock picker target">
+        <span className="lock-success-zone" />
+        <span className="lock-marker" />
+      </div>
+      <div className="button-row">
+        <button
+          className="secondary-button"
+          type="button"
+          disabled={running || locked}
+          onClick={() => {
+            setRunning(true);
+            setStartedAt(performance.now());
+            setMessage('Marker moving.');
+          }}
+        >
+          Start Lock
+        </button>
+        <button className="secondary-button" type="button" disabled={!running} onClick={stop}>
+          Stop Marker
+        </button>
+      </div>
+      <span>{message}</span>
+    </div>
+  );
+}
+
+function BombDefuseMini({
+  current,
+  setLoserId,
+  markNoPenalty,
+}: {
+  current: Player;
+  setLoserId: (id: string | undefined) => void;
+  markNoPenalty: (winner?: string | undefined) => void;
+}) {
+  const [targetButton] = useState(() => randomSource.integer(1, 3));
+  const [code] = useState(() => String(randomSource.integer(100, 999)));
+  const [correctWire] = useState(() => randomSource.pick(rushColours));
+  const [started, setStarted] = useState(false);
+  const [done, setDone] = useState(false);
+  const [step, setStep] = useState(0);
+  const [codeGuess, setCodeGuess] = useState('');
+  const [timeLeft, setTimeLeft] = useState(14);
+  const [message, setMessage] = useState('Start the bomb, then clear all three tasks.');
+
+  useEffect(() => {
+    if (!started || done) {
+      return;
+    }
+    const startedAt = performance.now();
+    const interval = window.setInterval(() => {
+      setTimeLeft(Math.max(0, 14 - Math.floor((performance.now() - startedAt) / 1000)));
+    }, 250);
+    const timeout = window.setTimeout(() => {
+      setDone(true);
+      setLoserId(current.id);
+      setMessage('Bomb timer expired.');
+    }, 14000);
+    return () => {
+      window.clearInterval(interval);
+      window.clearTimeout(timeout);
+    };
+  }, [current.id, done, setLoserId, started]);
+
+  const fail = (text: string) => {
+    setDone(true);
+    setLoserId(current.id);
+    setMessage(text);
+  };
+
+  const advance = () => {
+    if (step >= 2) {
+      setDone(true);
+      markNoPenalty(current.id);
+      setMessage('Bomb defused.');
+      return;
+    }
+    setStep((value) => value + 1);
+    setMessage('Good. Next task.');
+  };
+
+  return (
+    <div className="mini-card bomb-card">
+      <div className="bomb-status">
+        <strong>{started ? `${timeLeft}s` : 'Ready'}</strong>
+        <span>{message}</span>
+      </div>
+      {!started && (
+        <button className="secondary-button" type="button" onClick={() => setStarted(true)}>
+          Start Bomb
+        </button>
+      )}
+      {started && step === 0 && (
+        <div className="bomb-task">
+          <strong>Press Button {targetButton}.</strong>
+          <div className="button-row">
+            {[1, 2, 3].map((number) => (
+              <button
+                key={number}
+                className="secondary-button"
+                type="button"
+                disabled={done}
+                onClick={() => (number === targetButton ? advance() : fail('Wrong button.'))}
+              >
+                Button {number}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+      {started && step === 1 && (
+        <div className="guess-row">
+          <input value={codeGuess} onChange={(event) => setCodeGuess(event.target.value)} />
+          <button
+            className="secondary-button"
+            type="button"
+            disabled={done}
+            onClick={() => (codeGuess === code ? advance() : fail('Wrong code.'))}
+          >
+            Enter Code
+          </button>
+          <span>Code: {code}</span>
+        </div>
+      )}
+      {started && step === 2 && (
+        <div className="wire-grid">
+          {rushColours.map((wire) => (
+            <button
+              key={wire.id}
+              className="wire-button"
+              type="button"
+              disabled={done}
+              style={{ '--choice-colour': wire.value } as CSSProperties}
+              onClick={() => (wire.id === correctWire.id ? advance() : fail('Wrong wire.'))}
+            >
+              {wire.label}
+            </button>
+          ))}
+          <span>Cut {correctWire.label.toLowerCase()}.</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function TimerMini({
   current,
   setLoserId,
@@ -2095,6 +2571,11 @@ function minigameIcon(id: MinigameId): string {
     categories: 'ListChecks',
     'dice-duel': 'Dice5',
     'reaction-tap': 'Zap',
+    'colour-rush': 'Sparkles',
+    blackjack: 'WalletCards',
+    'wire-cutter': 'Split',
+    'lock-picker': 'Crosshair',
+    'bomb-defuse': 'BadgeAlert',
     'memory-chain': 'Brain',
     'number-guess': 'Hash',
     'trivia-blitz': 'CircleHelp',

@@ -25,7 +25,7 @@ import {
   type TileResolution,
 } from '../types/game';
 import { createId } from '../utils/ids';
-import { normaliseName } from '../utils/text';
+import { drinkWord, normaliseName, shotWord } from '../utils/text';
 import type { RandomSource } from './random';
 
 interface RandomOutcome {
@@ -680,7 +680,7 @@ function applyAssignment(
     });
 
     const targetAfter = result.players.find((player) => player.id === target.id) ?? target;
-    const messages = assignmentMessages(target.name, targetAfter, scaledAssignment);
+    const messages = assignmentMessages(target.name, targetAfter, scaledAssignment, settings);
     return messages.reduce((messageState, message) => addHistory(messageState, message), result);
   }, state);
 }
@@ -713,26 +713,31 @@ function scaleAssignmentForDifficulty(
   };
 }
 
-function assignmentMessages(targetName: string, target: Player, assignment: Assignment): string[] {
+function assignmentMessages(
+  targetName: string,
+  target: Player,
+  assignment: Assignment,
+  settings: GameSettings,
+): string[] {
   const messages: string[] = [];
   if (assignment.drinks) {
     messages.push(
-      `${targetName} received ${assignment.drinks} drink${assignment.drinks === 1 ? '' : 's'}. Total: ${target.drinks}.`,
+      `${targetName} received ${assignment.drinks} ${drinkWord(assignment.drinks, settings.alcoholFreeMode)}. Total: ${target.drinks}.`,
     );
   }
   if (assignment.shots) {
     messages.push(
-      `${targetName} received ${assignment.shots} shot${assignment.shots === 1 ? '' : 's'}. Total: ${target.shots}.`,
+      `${targetName} received ${assignment.shots} ${shotWord(assignment.shots, settings.alcoholFreeMode)}. Total: ${target.shots}.`,
     );
   }
   if (assignment.removeDrinks) {
     messages.push(
-      `${targetName} removed ${assignment.removeDrinks} drink${assignment.removeDrinks === 1 ? '' : 's'}.`,
+      `${targetName} removed ${assignment.removeDrinks} ${drinkWord(assignment.removeDrinks, settings.alcoholFreeMode)}.`,
     );
   }
   if (assignment.removeShots) {
     messages.push(
-      `${targetName} removed ${assignment.removeShots} shot${assignment.removeShots === 1 ? '' : 's'}.`,
+      `${targetName} removed ${assignment.removeShots} ${shotWord(assignment.removeShots, settings.alcoholFreeMode)}.`,
     );
   }
   if (assignment.shields) {
@@ -1138,6 +1143,9 @@ function applyMovementTile(
     );
     if (current.position < maxPosition) {
       return applyMovementOffset(state, getNumber(tile.actionConfig, 'offset', 2), settings);
+    }
+    if (tile.actionConfig?.fallbackShield === true) {
+      return resolveAssignments(state, [{ target: 'current', shields: 1 }], settings, random, {});
     }
     return resolveAssignments(
       state,

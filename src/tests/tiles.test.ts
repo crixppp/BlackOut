@@ -32,6 +32,27 @@ describe('tile catalogue', () => {
     }
   });
 
+  it('does not include drink-removal assignments on playable tiles', () => {
+    for (const tile of BOARD_TILES) {
+      const assignments = tile.actionConfig?.assignments;
+      if (!Array.isArray(assignments)) {
+        continue;
+      }
+      for (const assignment of assignments) {
+        expect(assignment).not.toHaveProperty('removeDrinks');
+        expect(assignment).not.toHaveProperty('removeShots');
+      }
+    }
+  });
+
+  it('uses sip wording except for the explicit finish-in-hand tile', () => {
+    const copy = BOARD_TILES.filter((tile) => tile.title !== 'Finish In Hand')
+      .map((tile) => `${tile.title} ${tile.description}`)
+      .join('\n');
+
+    expect(copy).not.toMatch(/\bdrinks?\b/i);
+  });
+
   it('has alternate wording for every tile', () => {
     for (const tile of BOARD_TILES) {
       expect(tile.alcoholFreeText.title.length).toBeGreaterThan(0);
