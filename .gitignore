@@ -1,0 +1,8 @@
+node_modules
+dist
+.playwright-browsers
+.DS_Store
+coverage
+.vite
+*.local
+npm-debug.log*
