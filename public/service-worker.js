@@ -1,6 +1,6 @@
 /* global self, caches, fetch, URL */
 
-const CACHE_NAME = 'black-out-core-v1';
+const CACHE_NAME = 'black-out-core-v2';
 const CORE_ASSETS = [
   './',
   './index.html',
@@ -30,6 +30,24 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('fetch', (event) => {
   const { request } = event;
   if (request.method !== 'GET') {
+    return;
+  }
+
+  if (request.mode === 'navigate') {
+    event.respondWith(
+      fetch(request)
+        .then((response) => {
+          if (response.ok) {
+            const copy = response.clone();
+            caches.open(CACHE_NAME).then((cache) => {
+              cache.put('./', copy.clone());
+              cache.put('./index.html', copy);
+            });
+          }
+          return response;
+        })
+        .catch(() => caches.match('./index.html')),
+    );
     return;
   }
 
