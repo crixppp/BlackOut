@@ -109,6 +109,7 @@ export interface Player {
   shields: number;
   goldenShields: number;
   finished: boolean;
+  skipped?: boolean;
   placement?: number;
   temporaryEffects: PlayerEffect[];
   statistics: PlayerStatistics;
@@ -221,7 +222,6 @@ export type MinigameId =
   | 'number-guess'
   | 'trivia-blitz'
   | 'exact-timer'
-  | 'sequence-tap'
   | 'hold-button'
   | 'sorting-sprint'
   | 'bluff-breaker'
@@ -241,6 +241,7 @@ export interface TileChoice {
   spinnerResult?: SpinnerSegmentId;
   highRollValue?: number;
   randomOutcomeIndex?: number;
+  randomPlayerId?: string;
   cardGuess?: 'red' | 'black' | 'spades' | 'hearts' | 'clubs' | 'diamonds';
   cardDraw?: PlayingCard;
 }

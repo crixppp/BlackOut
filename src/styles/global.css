@@ -816,6 +816,13 @@ select {
   justify-content: flex-end;
 }
 
+.auto-advance-note {
+  color: var(--colour-yellow);
+  font-size: 0.78rem;
+  font-weight: 950;
+  text-transform: uppercase;
+}
+
 .dice-mini {
   width: 58px;
   height: 58px;
@@ -855,12 +862,33 @@ select {
 }
 
 .modal {
+  position: relative;
   width: min(680px, 100%);
   max-height: min(88vh, 760px);
   overflow: auto;
   padding: 1rem;
   display: grid;
   gap: 1rem;
+}
+
+.modal-close-button {
+  position: absolute;
+  top: 0.7rem;
+  right: 0.7rem;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  border: 3px solid #000000;
+  border-radius: 8px;
+  color: #080808;
+  background: #ffffff;
+}
+
+.modal-close-button svg {
+  width: 1.25rem;
+  height: 1.25rem;
 }
 
 .motion-label {
@@ -900,7 +928,20 @@ select {
 
 .reveal-modal {
   width: min(560px, 100%);
+  overflow: hidden;
   animation: revealCardIn 420ms cubic-bezier(0.19, 1, 0.22, 1);
+}
+
+.reveal-modal::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 6px;
+  width: 100%;
+  background: var(--colour-yellow);
+  transform-origin: left center;
+  animation: popupProgress 5000ms linear forwards;
 }
 
 .challenge-reveal-card {
@@ -976,13 +1017,14 @@ select {
   position: absolute;
   top: 50%;
   left: 50%;
-  width: 92px;
+  width: 68px;
   color: #080808;
-  font-size: 0.7rem;
+  font-size: 0.62rem;
   font-weight: 950;
   text-align: center;
   text-transform: uppercase;
-  transform: rotate(var(--segment-angle)) translateX(48px) rotate(90deg);
+  transform: translate(-50%, -50%) rotate(var(--segment-angle)) translateY(-66px)
+    rotate(calc(-1 * var(--segment-angle)));
   transform-origin: 0 0;
   text-shadow: 0 1px 0 rgba(255, 255, 255, 0.42);
 }
@@ -990,7 +1032,7 @@ select {
 .game-popup {
   position: fixed;
   left: 50%;
-  top: 17vh;
+  top: 50%;
   z-index: 180;
   display: grid;
   gap: 0.25rem;
@@ -1002,8 +1044,21 @@ select {
   background: var(--colour-yellow);
   box-shadow: 0 16px 0 rgba(0, 0, 0, 0.48);
   text-align: center;
-  transform: translateX(-50%);
+  overflow: hidden;
+  transform: translate(-50%, -50%);
   animation: popupIn 260ms cubic-bezier(0.19, 1, 0.22, 1);
+}
+
+.game-popup::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 6px;
+  width: 100%;
+  background: rgba(0, 0, 0, 0.72);
+  transform-origin: left center;
+  animation: popupProgress var(--popup-duration, 5000ms) linear forwards;
 }
 
 .game-popup strong {
@@ -1051,6 +1106,11 @@ select {
 .choice-card.selected {
   background: var(--colour-yellow);
   box-shadow: inset 0 0 0 4px rgba(0, 0, 0, 0.16);
+}
+
+.secondary-button.disabled {
+  opacity: 0.45;
+  pointer-events: none;
 }
 
 .card-game-panel {
@@ -1110,6 +1170,18 @@ select {
 
 .risk-roll-panel {
   justify-items: center;
+}
+
+.risk-outcome-list {
+  display: grid;
+  gap: 0.35rem;
+  width: min(360px, 100%);
+  padding: 0.65rem;
+  border: 2px solid rgba(255, 255, 255, 0.14);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.22);
+  font-size: 0.86rem;
+  font-weight: 850;
 }
 
 .minigame-panel {
@@ -1300,39 +1372,6 @@ select {
   grid-column: 1 / -1;
 }
 
-.sequence-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.6rem;
-}
-
-.sequence-dot {
-  display: grid;
-  place-items: center;
-  width: 58px;
-  height: 58px;
-  border: 3px solid #000000;
-  border-radius: 8px;
-  font-weight: 950;
-  color: #080808;
-}
-
-.sequence-dot.yellow {
-  background: var(--colour-yellow);
-}
-
-.sequence-dot.white {
-  background: #ffffff;
-}
-
-.sequence-dot.red {
-  background: #ff7b7f;
-}
-
-.sequence-dot.cyan {
-  background: var(--colour-cyan);
-}
-
 .hold-button {
   width: 100%;
   color: #080808;
@@ -1507,11 +1546,20 @@ select {
 @keyframes popupIn {
   from {
     opacity: 0;
-    transform: translate(-50%, -16px) scale(0.96);
+    transform: translate(-50%, calc(-50% - 16px)) scale(0.96);
   }
   to {
     opacity: 1;
-    transform: translate(-50%, 0) scale(1);
+    transform: translate(-50%, -50%) scale(1);
+  }
+}
+
+@keyframes popupProgress {
+  from {
+    transform: scaleX(1);
+  }
+  to {
+    transform: scaleX(0);
   }
 }
 

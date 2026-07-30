@@ -170,6 +170,7 @@ function createPlayer(draft: PlayerDraft): Player {
     shields: 0,
     goldenShields: 0,
     finished: false,
+    skipped: false,
     temporaryEffects: [],
     statistics: cloneStats(),
   };
@@ -221,7 +222,7 @@ export function getCurrentPlayer(state: GameState): Player {
 }
 
 export function getUnfinishedPlayers(state: GameState): Player[] {
-  return state.players.filter((player) => !player.finished);
+  return state.players.filter((player) => !player.finished && !player.skipped);
 }
 
 export function getEligibleTargets(
@@ -231,7 +232,7 @@ export function getEligibleTargets(
 ): Player[] {
   const current = getCurrentPlayer(state);
   return state.players.filter((player) => {
-    if (!includeFinished && player.finished) {
+    if (!includeFinished && (player.finished || player.skipped)) {
       return false;
     }
     if (!includeCurrent && player.id === current.id) {
@@ -246,7 +247,7 @@ export function startTurn(state: GameState): GameState {
     return state;
   }
   const current = getCurrentPlayer(state);
-  if (current.finished) {
+  if (current.finished || current.skipped) {
     return moveToNextTurn(state);
   }
   return addHistory(
@@ -438,13 +439,13 @@ export function moveToNextTurn(state: GameState): GameState {
   if (state.status !== 'active') {
     return state;
   }
-  if (state.players.every((player) => player.finished)) {
+  if (state.players.every((player) => player.finished || player.skipped)) {
     return completeGame(state);
   }
 
   const nextIndex = nextActivePlayerIndex(state, state.currentPlayerIndex);
   const current = getCurrentPlayer(state);
-  const hasBonusTurn = state.bonusTurnPlayerId === current.id && !current.finished;
+  const hasBonusTurn = state.bonusTurnPlayerId === current.id && !current.finished && !current.skipped;
   const targetIndex = hasBonusTurn ? state.currentPlayerIndex : nextIndex;
   const clearedPlayers = state.players.map((player) => ({
     ...player,
@@ -502,6 +503,30 @@ export function applyManualAdjustment(
   return addHistory(adjusted, `${player?.name ?? 'A player'} score was adjusted.`);
 }
 
+export function togglePlayerSkipped(state: GameState, playerId: string): GameState {
+  const activePlayers = state.players.filter((player) => !player.finished && !player.skipped);
+  const target = state.players.find((player) => player.id === playerId);
+  if (!target || target.finished) {
+    return state;
+  }
+  if (!target.skipped && activePlayers.length <= 1) {
+    return addHistory(state, 'At least one unfinished player must stay active.');
+  }
+  const updated = updatePlayer(state, playerId, (player) => ({
+    ...player,
+    skipped: !player.skipped,
+  }));
+  const updatedPlayer = updated.players.find((player) => player.id === playerId);
+  const withHistory = addHistory(
+    updated,
+    `${updatedPlayer?.name ?? 'Player'} was ${updatedPlayer?.skipped ? 'skipped' : 'returned to play'}.`,
+  );
+  if (updatedPlayer?.skipped && state.players[state.currentPlayerIndex]?.id === playerId) {
+    return moveToNextTurn(withHistory);
+  }
+  return withHistory;
+}
+
 export function playAgainWithSamePlayers(state: GameState): GameState {
   const now = new Date().toISOString();
   const resetPlayers = state.players.map((player) => ({
@@ -512,6 +537,7 @@ export function playAgainWithSamePlayers(state: GameState): GameState {
     shields: 0,
     goldenShields: 0,
     finished: false,
+    skipped: false,
     placement: undefined,
     temporaryEffects: [],
     statistics: cloneStats(),
@@ -565,7 +591,7 @@ function isMinigameId(value: unknown): value is MinigameId {
 function nextActivePlayerIndex(state: GameState, fromIndex: number): number {
   for (let offset = 1; offset <= state.players.length; offset += 1) {
     const index = (fromIndex + offset) % state.players.length;
-    if (!state.players[index].finished) {
+    if (!state.players[index].finished && !state.players[index].skipped) {
       return index;
     }
   }
@@ -575,7 +601,7 @@ function nextActivePlayerIndex(state: GameState, fromIndex: number): number {
 function previousActivePlayer(state: GameState): Player {
   for (let offset = 1; offset <= state.players.length; offset += 1) {
     const index = (state.currentPlayerIndex - offset + state.players.length) % state.players.length;
-    if (!state.players[index].finished) {
+    if (!state.players[index].finished && !state.players[index].skipped) {
       return state.players[index];
     }
   }
@@ -619,7 +645,7 @@ function markCurrentPlayerFinished(state: GameState): GameState {
     },
     `${current.name} finished in place ${place}.`,
   );
-  if (placed.players.every((player) => player.finished)) {
+  if (placed.players.every((player) => player.finished || player.skipped)) {
     return completeGame(placed);
   }
   return {
@@ -668,12 +694,12 @@ function applyAssignment(
     const result = updatePlayer(nextState, target.id, (player) => {
       const drinkCount = scaledAssignment.drinks ?? 0;
       const shotCount = scaledAssignment.shots ?? 0;
-      const useShield =
-        choice.shieldUsedByPlayerId === player.id && drinkCount > 0 && player.shields > 0;
-      const useGolden =
-        choice.shieldUsedByPlayerId === player.id && shotCount > 0 && player.goldenShields > 0;
-      const effectiveDrinks = Math.max(0, drinkCount - (useShield ? 1 : 0));
-      const effectiveShots = Math.max(0, shotCount - (useGolden ? 1 : 0));
+      const useShield = (drinkCount > 0 || shotCount > 0) && player.shields > 0;
+      const useGolden = !useShield && shotCount > 0 && player.goldenShields > 0;
+      const shieldedDrink = useShield && drinkCount > 0 ? 1 : 0;
+      const shieldedShot = useShield && drinkCount <= 0 && shotCount > 0 ? 1 : 0;
+      const effectiveDrinks = Math.max(0, drinkCount - shieldedDrink);
+      const effectiveShots = Math.max(0, shotCount - shieldedShot - (useGolden ? 1 : 0));
       const largest = Math.max(
         player.statistics.largestSingleAssignment,
         effectiveDrinks + effectiveShots,
@@ -700,7 +726,7 @@ function applyAssignment(
     });
 
     const targetAfter = result.players.find((player) => player.id === target.id) ?? target;
-    const messages = assignmentMessages(target.name, targetAfter, scaledAssignment, settings);
+    const messages = assignmentMessages(target.name, target, targetAfter, scaledAssignment, settings);
     const withMessages = messages.reduce(
       (messageState, message) => addHistory(messageState, message),
       result,
@@ -726,7 +752,7 @@ function applyBuddySpillover(
     return state;
   }
   const buddy = state.players.find(
-    (player) => player.id === buddyEffect.linkedPlayerId && !player.finished,
+    (player) => player.id === buddyEffect.linkedPlayerId && !player.finished && !player.skipped,
   );
   if (!buddy || buddy.id === target.id) {
     return state;
@@ -765,31 +791,39 @@ function scaleAssignmentForDifficulty(
     return assignment;
   }
 
-  const lateDrinkBonus = drinks > 0 && progress >= 0.68 && assignment.target !== 'everyone' ? 1 : 0;
-  const finishLineDrinkBonus = shots > 0 && progress >= 0.82 ? 1 : 0;
+  const lateDrinkBonus =
+    drinks > 0 && drinks < 10 && progress >= 0.68 && assignment.target !== 'everyone' ? 1 : 0;
+  const lateShotBonus = shots > 0 && progress >= 0.78 && assignment.target !== 'everyone' ? 1 : 0;
 
   return {
     ...assignment,
-    drinks: drinks + lateDrinkBonus + finishLineDrinkBonus || undefined,
-    shots: shots || undefined,
+    drinks: drinks + lateDrinkBonus || undefined,
+    shots: shots + lateShotBonus || undefined,
   };
 }
 
 function assignmentMessages(
   targetName: string,
+  targetBefore: Player,
   target: Player,
   assignment: Assignment,
   settings: GameSettings,
 ): string[] {
   const messages: string[] = [];
   if (assignment.drinks) {
+    const received = Math.max(0, target.drinks - targetBefore.drinks);
     messages.push(
-      `${targetName} received ${assignment.drinks} ${drinkWord(assignment.drinks, settings.alcoholFreeMode)}. Total: ${target.drinks}.`,
+      received > 0
+        ? `${targetName} received ${received} ${drinkWord(received, settings.alcoholFreeMode)}. Total: ${target.drinks}.`
+        : `${targetName}'s Shield blocked the sip penalty.`,
     );
   }
   if (assignment.shots) {
+    const received = Math.max(0, target.shots - targetBefore.shots);
     messages.push(
-      `${targetName} received ${assignment.shots} ${shotWord(assignment.shots, settings.alcoholFreeMode)}. Total: ${target.shots}.`,
+      received > 0
+        ? `${targetName} received ${received} ${shotWord(received, settings.alcoholFreeMode)}. Total: ${target.shots}.`
+        : `${targetName}'s Shield blocked the shot penalty.`,
     );
   }
   if (assignment.removeDrinks) {
@@ -806,7 +840,7 @@ function assignmentMessages(
     messages.push(`${targetName} gained ${assignment.shields} Shield.`);
   }
   if (assignment.goldenShields) {
-    messages.push(`${targetName} gained ${assignment.goldenShields} Golden Shield.`);
+    messages.push(`${targetName} gained ${assignment.goldenShields} Shot Shield.`);
   }
   return messages;
 }
@@ -829,18 +863,23 @@ function resolveAssignmentTargets(
       if (assignment.secondary) {
         const secondary =
           state.players.find(
-            (player) => player.id === choice.secondaryTargetPlayerId && !player.finished,
+            (player) => player.id === choice.secondaryTargetPlayerId && !player.finished && !player.skipped,
           ) ?? getEligibleTargets(state, false)[0];
         return secondary ? [secondary] : [current];
       }
       const id = choice.targetPlayerId;
       const fallback = getEligibleTargets(state, true)[0];
       const target =
-        state.players.find((player) => player.id === id && !player.finished) ?? fallback;
+        state.players.find((player) => player.id === id && !player.finished && !player.skipped) ??
+        fallback;
       return [target].filter(Boolean);
     }
     case 'random':
-      return [random.pick(getEligibleTargets(state, true))];
+      return [
+        state.players.find(
+          (player) => player.id === choice.randomPlayerId && !player.finished && !player.skipped,
+        ) ?? random.pick(getEligibleTargets(state, true)),
+      ];
     case 'previous':
       return [previousActivePlayer(state)];
     case 'everyone':
@@ -905,7 +944,7 @@ export const tileActionHandlers: Record<BoardTile['actionType'], TileActionHandl
     if (tile.actionConfig?.halfRound === true) {
       const currentIndex = state.currentPlayerIndex;
       const targets = state.players.filter(
-        (player, index) => !player.finished && (index + currentIndex) % 2 === 0,
+        (player, index) => !player.finished && !player.skipped && (index + currentIndex) % 2 === 0,
       );
       return targets.reduce(
         (nextState, target) =>
@@ -1014,7 +1053,9 @@ export const tileActionHandlers: Record<BoardTile['actionType'], TileActionHandl
   buddy: (state, _tile, _settings, _random, choice) => {
     const current = getCurrentPlayer(state);
     const targetId = choice.targetPlayerId;
-    const target = state.players.find((player) => player.id === targetId && !player.finished);
+    const target = state.players.find(
+      (player) => player.id === targetId && !player.finished && !player.skipped,
+    );
     if (!target || target.id === current.id) {
       return addHistory(state, `${current.name} did not choose a buddy.`);
     }
@@ -1174,7 +1215,7 @@ function resolveSpinnerResult(
     case 'choose-player':
       return resolveAssignments(
         withHistory,
-        [{ target: 'chosen', drinks: 1 }],
+        [{ target: 'chosen', drinks: 2 }],
         settings,
         random,
         choice,
@@ -1253,7 +1294,9 @@ function applyMovementTile(
   if (tile.actionConfig?.comeback === true) {
     const current = getCurrentPlayer(state);
     const maxPosition = Math.max(
-      ...state.players.filter((player) => !player.finished).map((player) => player.position),
+      ...state.players
+        .filter((player) => !player.finished && !player.skipped)
+        .map((player) => player.position),
     );
     if (current.position < maxPosition) {
       return applyMovementOffset(state, getNumber(tile.actionConfig, 'offset', 2), settings);
@@ -1344,7 +1387,7 @@ export function validateGameState(state: GameState): ValidationResult {
     }
     placementPlaces.add(placement.place);
   }
-  if (state.status === 'active' && state.players.every((player) => player.finished)) {
+  if (state.status === 'active' && state.players.every((player) => player.finished || player.skipped)) {
     warnings.push('All players are finished but the game is still marked active.');
   }
   for (const tile of BOARD_TILES) {
